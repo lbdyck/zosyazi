@@ -1,0 +1,151 @@
+.\" Manpage for zosyazi
+.\" Contact: https://github.com/
+.TH ZOSYAZI 1 "19 November 2026" "zosyazi 1.1.0" "User Commands"
+.SH NAME
+zosyazi \- lightweight terminal file manager for z/OS UNIX and /dsfs
+.SH SYNOPSIS
+.B zosyazi
+[\fIPATH\fR]
+[\fB\-\-cwd\-file\fR=\fIFILE\fR]
+[\fB\-V\fR | \fB\-\-version\fR]
+[\fB\-h\fR | \fB\-\-help\fR]
+
+.SH DESCRIPTION
+.B zosyazi
+is a zero-dependency, Yazi-inspired terminal file manager designed specifically for
+\fBz/OS UNIX System Services (USS)\fR and the IBM Open Enterprise SDK for Python.
+It features a 3-column Miller layout, Vim-style keybindings, Git branch/status badges,
+and native awareness for \fBz/OS /dsfs (Data Set File System)\fR and \fBfile tags (ls \-T / chtag)\fR.
+
+.SH ARGUMENTS
+.TP
+.I PATH
+Initial directory or file to open. Defaults to the current working directory (\fB.\fR).
+Accepts absolute paths, relative paths, environment variables (e.g. \fI$HOME\fR),
+and z/OS \fI/dsfs\fR paths (e.g. \fI/dsfs/txt/USER.*\fR).
+
+.SH OPTIONS
+.TP
+.BI \-\-cwd\-file= FILE
+Write the final working directory to \fIFILE\fR upon exit. Useful for shell wrapper scripts to
+automatically change the active shell directory to the directory browsed inside \fBzosyazi\fR.
+.TP
+.BR \-V ", " \-\-version
+Show the program's version number and exit.
+.TP
+.BR \-h ", " \-\-help
+Show the command-line help message and exit.
+
+.SH KEYBINDINGS
+
+.SS Navigation
+.TP
+.BR j ", " Down
+Move cursor down.
+.TP
+.BR k ", " Up
+Move cursor up.
+.TP
+.BR h ", " H ", " Left ", " Backspace
+Move up to the parent directory (or activate the \fB..\fR entry).
+.TP
+.BR l ", " Right ", " Enter
+Enter the highlighted directory or open the highlighted file in the built-in viewer.
+.TP
+.B v
+Open the highlighted file directly in the built-in full-screen file viewer.
+.TP
+.BR g " / " G
+Jump to the top / bottom of the directory listing.
+.TP
+.B c
+Prompt for a new path to jump directly to (supports environment variables and \fI~\fR).
+.TP
+.B ~
+Jump directly to the user's home directory.
+.TP
+.BR m\fIkey\fR " / " '\fIkey\fR
+Set bookmark (\fBm\fR followed by a letter) or jump to bookmark (\fB'\fR followed by a letter).
+Predefined bookmarks: \fBh\fR (home), \fBr\fR (/), \fBt\fR (/tmp), \fBd\fR (/dsfs/txt).
+.TP
+.BR / " then " Esc
+Filter current directory listing / clear active filter.
+.TP
+.B .
+Toggle display of hidden files (dotfiles).
+
+.SS File Operations
+.TP
+.B Space
+Toggle selection mark on the highlighted item (supports multi-item operations).
+.TP
+.BR y " / " x " / " p
+Yank (copy) / Cut / Paste selected or highlighted items.
+.TP
+.B d
+Delete selected items or current item (with confirmation).
+.TP
+.B r
+Rename the highlighted item.
+.TP
+.B a
+Create a new file or directory (end the name with \fB/\fR to create a directory).
+.TP
+.B e
+Open the highlighted file in \fB$EDITOR\fR (falls back to \fBvim\fR, \fBnano\fR, or \fBvi\fR).
+Curses mode is cleanly suspended and restored.
+.TP
+.B T
+Open the interactive z/OS file tagging prompt (\fBchtag\fR) to switch encoding
+between ISO8859-1 (ASCII), IBM-1047 (EBCDIC), UTF-8, custom CCSID, or remove tagging.
+.TP
+.BR ! " or " X
+Execute a shell command with the current item, or submit as a batch JCL job if the
+file ends in \fI.jcl\fR, \fI.cntl\fR, or \fI.job\fR. In command prompts, \fB%f\fR is replaced
+by the filename and \fB%F\fR is replaced by the full path.
+
+.SS General
+.TP
+.BR q ", " Esc
+Quit \fBzosyazi\fR.
+.TP
+.BR F1 ", " ?
+Toggle the interactive, color-coded help tutorial.
+
+.SH Z/OS & DSFS INTEGRATION
+.B zosyazi
+includes custom handling for z/OS specific concepts:
+.IP \(bu 2
+\fB/dsfs Awareness:\fR Prevents realpath resolution from breaking virtual HLQ directories
+in \fI/dsfs/txt\fR, \fI/dsfs/bin\fR, and \fI/dsfs/rec\fR.
+.IP \(bu 2
+\fBHex & ASCII Dump:\fR Binary files and \fI/dsfs/bin\fR files are automatically rendered as
+offset, hexadecimal, and ASCII representation in previews and the viewer.
+.IP \(bu 2
+\fBEBCDIC / ASCII Decoding:\fR Files tagged as \fIIBM-1047\fR are decoded using \fIcp1047\fR,
+while ASCII and UTF-8 files are decoded accordingly.
+.IP \(bu 2
+\fBPerformance Caching:\fR Batch-fetches file tags across directories using \fIls \-T\fR to
+eliminate per-item subprocess overhead on z/OS USS.
+
+.SH ENVIRONMENT
+.TP
+.B ZOSYAZI_DSFS
+Root mount point for the Data Set File System (defaults to \fI/dsfs\fR).
+.TP
+.B EDITOR
+Specifies the editor to use when pressing \fBe\fR.
+.TP
+.B HOME
+Used for the home directory jump (\fB~\fR).
+
+.SH SEE ALSO
+.BR chtag (1),
+.BR ls (1),
+.BR submit (1),
+.BR git (1)
+
+.SH AUTHORS
+Written for z/OS UNIX by Lionel B. Dyck and contributors.
+.SH LICENSE
+MIT License.

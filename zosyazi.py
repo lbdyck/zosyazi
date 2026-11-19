@@ -4,40 +4,6 @@
 zosyazi.py - A lightweight, zero-dependency Yazi-inspired terminal file manager
 for z/OS UNIX (IBM Open Enterprise SDK for Python).
 
-Version: 1.0.1
-
-Features:
-- Three-column Miller layout (Parent | Current | Preview)
-- Built-in scrollable full-screen file viewer (safe for ASCII/EBCDIC & /dsfs)
-- Initial path argument (directory or file) and interactive path jumping ('c', '~')
-- Colored, scrollable F1 interactive tutorial
-- Git branch & color-coded status badges
-- z/OS /dsfs (Data Set File System) awareness (/dsfs/txt, /dsfs/bin, /dsfs/rec)
-- z/OS file-tag (ls -T) aware previews for EBCDIC (IBM-1047) and ASCII/UTF-8
-
-Change History:
-- 1.0.1 (2026-11-19):
-    * Added built-in scrollable full-screen file viewer (view_file) bound to
-      Enter / l / Right / v so displaying files stays inside curses and safely
-      handles EBCDIC (IBM-1047), ASCII/UTF-8, and /dsfs datasets.
-    * Fixed open_editor() ('e') to properly suspend/restore curses via
-      def_prog_mode()/reset_prog_mode() and prefer ASCII-native editors
-      (vim, nano) over EBCDIC /bin/vi when $EDITOR is unset.
-    * Added '..' parent-directory entry at the top of the middle pane and
-      expanded move-up keys to h / H / Left / Backspace with status feedback.
-    * Updated F1 tutorial to reflect built-in viewer and navigation updates.
-- 1.0.0 (2026-11-19):
-    * Added version constant, TUI header version display, and -V/--version flag.
-    * Added MIT License and Change History.
-    * Fixed /dsfs virtual HLQ directory handling via normalize_path() and
-      safe_is_dir() to avoid realpath()/.resolve() collapsing virtual paths.
-    * Added initial path CLI argument (directory or file) and interactive
-      top-level path jumping ('c' and '~').
-    * Added colored, scrollable F1 interactive tutorial.
-    * Added Git branch detection and color-coded status badges (M, A, D, ?).
-    * Added z/OS /dsfs awareness (/dsfs/txt, /dsfs/bin hex dump, /dsfs/rec).
-    * Initial 3-column Miller layout with z/OS file-tag (ls -T) previews.
-
 MIT License
 
 Copyright (c) 2026
@@ -64,6 +30,8 @@ SOFTWARE.
 import argparse
 import curses
 import os
+import pwd
+import grp
 import shutil
 import stat
 import subprocess
@@ -71,7 +39,7 @@ import sys
 import time
 from pathlib import Path
 
-__version__ = "1.0.1"
+__version__ = "1.1.0"
 DSFS_ROOT = os.environ.get("ZOSYAZI_DSFS", "/dsfs").rstrip("/")
 
 
@@ -142,6 +110,31 @@ def get_zos_tag(path: Path) -> str:
     except Exception:
         pass
     return ""
+
+
+def get_dir_tags(directory: Path) -> dict:
+    """Batch-fetch z/OS file tags for all items in a directory to minimize subprocess spawns."""
+    if is_dsfs_path(directory):
+        return {}
+    tag_map = {}
+    try:
+        res = subprocess.run(
+            ["ls", "-T", str(directory)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1.0,
+        )
+        if res.returncode == 0 and res.stdout:
+            for line in res.stdout.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 4:
+                    tag_str = f"{parts[0]} {parts[1]} {parts[2]}"
+                    filename = parts[3]
+                    tag_map[str(directory / filename)] = tag_str
+    except Exception:
+        pass
+    return tag_map
 
 
 def get_git_info(directory: Path):
@@ -275,6 +268,13 @@ class ZosYazi:
         self.clipboard = []
         self.clipboard_mode = None
 
+        self.bookmarks = {
+            "h": Path.home(),
+            "r": Path("/"),
+            "t": Path("/tmp"),
+            "d": Path(DSFS_ROOT + "/txt") if Path(DSFS_ROOT).exists() else Path("/dsfs"),
+        }
+
         self.git_branch = None
         self.git_status = {}
 
@@ -322,6 +322,10 @@ class ZosYazi:
             self.entries.insert(0, self.cwd / "..")
         else:
             self.parent_entries = []
+
+        # Batch-populate tag cache for performance on z/OS
+        batch_tags = get_dir_tags(self.cwd)
+        self.tag_cache.update(batch_tags)
 
         self.git_branch, self.git_status = get_git_info(self.cwd)
 
@@ -487,7 +491,7 @@ class ZosYazi:
             self.stdscr.refresh()
             return
 
-        # Header bar with version
+        # Header bar with version and space info
         badges = []
         if is_dsfs_path(self.cwd):
             badges.append(f"[DSFS:{get_dsfs_mode(self.cwd)}]")
@@ -495,6 +499,14 @@ class ZosYazi:
             badges.append(f"[git:{self.git_branch}]")
         if self.filter_text:
             badges.append(f"[filter:{self.filter_text}]")
+
+        try:
+            if not is_dsfs_path(self.cwd):
+                usage = shutil.disk_usage(self.cwd)
+                free_str = human_size(usage.free)
+                badges.append(f"[free:{free_str}]")
+        except OSError:
+            pass
 
         badge_str = (" " + " ".join(badges)) if badges else ""
         header = f" zosyazi v{__version__} | {self.cwd}{badge_str}"
@@ -587,7 +599,15 @@ class ZosYazi:
                     mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime))
                     tag = self.get_tag_cached(cur)
                     tag_str = f" [{tag}]" if tag else ""
-                    info = f" {mode} {size:>6} {mtime}{tag_str}"
+                    try:
+                        uname = pwd.getpwuid(st.st_uid).pw_name
+                    except (KeyError, AttributeError):
+                        uname = str(st.st_uid)
+                    try:
+                        gname = grp.getgrgid(st.st_gid).gr_name
+                    except (KeyError, AttributeError):
+                        gname = str(st.st_gid)
+                    info = f" {mode} {uname}:{gname} {size:>6} {mtime}{tag_str}"
                 except OSError:
                     info = " <stat failed>"
 
@@ -634,6 +654,7 @@ class ZosYazi:
             ("key", "  g / G              ", "Jump to top / bottom of list"),
             ("key", "  c                  ", "Change top-level path (e.g. /dsfs/txt, ~, $HOME)"),
             ("key", "  ~                  ", "Jump directly to home directory"),
+            ("key", "  m<key> / '<key>    ", "Set bookmark / Jump to bookmark (h, r, t, d)"),
             ("key", "  /  then  Esc       ", "Filter current directory / clear filter"),
             ("key", "  .                  ", "Toggle hidden dotfiles"),
             ("blank", "", ""),
@@ -644,6 +665,8 @@ class ZosYazi:
             ("key", "  r                  ", "Rename current item"),
             ("key", "  a                  ", "Create file (end name with / for directory)"),
             ("key", "  e                  ", "Open current file in $EDITOR (vim/nano/vi)"),
+            ("key", "  T                  ", "Manage z/OS file tags (chtag -t/-r/etc)"),
+            ("key", "  ! / X              ", "Execute shell command or submit JCL file"),
             ("blank", "", ""),
             ("section", "3. GIT STATUS BADGES", ""),
             ("git", "  M  ", "Modified file (or directory containing changes)"),
@@ -657,7 +680,7 @@ class ZosYazi:
             ("dsfs", "  /dsfs/bin  ", "MVS datasets previewed/viewed as Hex + ASCII"),
             ("dsfs", "  /dsfs/rec  ", "Record-oriented MVS dataset access"),
             ("text", "  Regular z/OS UNIX files use ls -T tags (IBM-1047 / ISO8859-1 / UTF-8)", ""),
-            ("text", "  to decode previews automatically. Git & ls -T are skipped in /dsfs.", ""),
+            ("text", "  to decode previews automatically. Batch tags cached for high performance.", ""),
             ("blank", "", ""),
             ("section", "5. EXITING", ""),
             ("key", "  q / Esc            ", "Quit zosyazi (supports --cwd-file wrapper)"),
@@ -708,6 +731,8 @@ class ZosYazi:
                 offset = min(max_offset, offset + body_h)
             elif key == curses.KEY_PPAGE:
                 offset = max(0, offset - body_h)
+            elif key == curses.KEY_RESIZE:
+                continue
 
     def view_file(self, path: Path):
         """Built-in, scrollable full-screen file viewer (safe for ASCII/EBCDIC & /dsfs)."""
@@ -763,7 +788,7 @@ class ZosYazi:
                 )
 
             pct = int(((offset + body_h) / max(1, len(lines))) * 100)
-            footer = f" j/k/PgUp/PgDn/g/G: Scroll | e: Edit | q/Esc/h: Back   {min(100, pct)}% "
+            footer = f" j/k/PgUp/PgDn/g/G: Scroll | e: Edit | T: Tag | q/Esc/h: Back   {min(100, pct)}% "
             safe_addstr(self.stdscr, h - 1, 0, footer.ljust(w - 1), curses.color_pair(5))
             self.stdscr.refresh()
 
@@ -773,6 +798,9 @@ class ZosYazi:
             elif key == ord("e"):
                 self.open_editor(path)
                 break
+            elif key == ord("T"):
+                self.handle_chtag(path)
+                tag = self.get_tag_cached(path)
             elif key in (ord("j"), curses.KEY_DOWN):
                 offset = min(max_offset, offset + 1)
             elif key in (ord("k"), curses.KEY_UP):
@@ -785,6 +813,8 @@ class ZosYazi:
                 offset = 0
             elif key == ord("G"):
                 offset = max_offset
+            elif key == curses.KEY_RESIZE:
+                continue
 
     def open_editor(self, path: Path):
         if path.name == ".." or safe_is_dir(path):
@@ -812,6 +842,115 @@ class ZosYazi:
             self.tag_cache.pop(str(path), None)
             self.preview_cache = ("", [])
             self.git_branch, self.git_status = get_git_info(self.cwd)
+
+    def handle_chtag(self, target_path: Path = None):
+        """Interactive z/OS chtag file tagging tool."""
+        if target_path is None:
+            cur = self.current_item()
+            if not cur or cur.name == "..":
+                return
+            target_path = cur
+
+        if is_dsfs_path(target_path):
+            self.status_msg = "chtag is not applicable to /dsfs paths"
+            return
+
+        current_tag = self.get_tag_cached(target_path) or "untagged"
+        prompt_txt = f"chtag ({target_path.name} is {current_tag}) [1=ISO8859-1, 2=IBM-1047, 3=UTF-8, 4=Remove, 5=Custom]: "
+        choice = self.prompt(prompt_txt)
+        if not choice:
+            self.status_msg = "chtag cancelled"
+            return
+
+        cmd = None
+        if choice == "1":
+            cmd = ["chtag", "-tc", "ISO8859-1", str(target_path)]
+        elif choice == "2":
+            cmd = ["chtag", "-tc", "IBM-1047", str(target_path)]
+        elif choice == "3":
+            cmd = ["chtag", "-tc", "UTF-8", str(target_path)]
+        elif choice == "4":
+            cmd = ["chtag", "-r", str(target_path)]
+        elif choice == "5":
+            custom_ccs = self.prompt("Enter CCSID or encoding name (e.g. IBM-1047, ISO8859-1, 819): ")
+            if custom_ccs:
+                cmd = ["chtag", "-tc", custom_ccs, str(target_path)]
+        else:
+            self.status_msg = "Invalid chtag option"
+            return
+
+        if cmd:
+            try:
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2.0)
+                if res.returncode == 0:
+                    self.tag_cache.pop(str(target_path), None)
+                    new_tag = self.get_tag_cached(target_path)
+                    self.preview_cache = ("", [])
+                    self.status_msg = f"Tagged as {new_tag or 'untagged'}"
+                else:
+                    err = res.stderr.strip() or res.stdout.strip() or "failed"
+                    self.status_msg = f"chtag error: {err}"
+            except Exception as e:
+                self.status_msg = f"chtag failed: {e}"
+
+    def handle_exec_or_submit(self):
+        """Execute a shell command or submit JCL with the current file."""
+        cur = self.current_item()
+        if not cur or cur.name == "..":
+            return
+
+        # Check if file looks like JCL / CNTL
+        is_jcl = cur.suffix.lower() in (".jcl", ".cntl", ".job")
+        if is_jcl:
+            ans = self.prompt(f"Submit '{cur.name}' as JCL job? (y/N/command): ")
+            if ans.lower() == "y":
+                # Attempt z/OS submit
+                submit_cmd = shutil.which("submit") or "/bin/submit"
+                try:
+                    res = subprocess.run([submit_cmd, str(cur)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5.0)
+                    out = res.stdout.strip() or res.stderr.strip()
+                    self.status_msg = f"Submit: {out[:60]}" if out else "Job submitted"
+                except Exception as e:
+                    self.status_msg = f"Submit failed: {e}"
+                return
+            elif ans and ans.lower() != "n":
+                cmd_str = ans
+            else:
+                return
+        else:
+            cmd_str = self.prompt(f"Run command (%f = '{cur.name}'): ")
+            if not cmd_str:
+                return
+
+        cmd_str = cmd_str.replace("%f", f'"{cur.name}"').replace("%F", f'"{str(cur)}"')
+
+        curses.def_prog_mode()
+        curses.endwin()
+        try:
+            print(f"\n--- Executing: {cmd_str} ---\n")
+            subprocess.run(cmd_str, shell=True, cwd=str(self.cwd))
+            print("\n--- Press Enter to return to zosyazi ---")
+            input()
+        finally:
+            curses.reset_prog_mode()
+            self.stdscr.keypad(True)
+            curses.curs_set(0)
+            self.stdscr.clear()
+            self.stdscr.refresh()
+            self.refresh_dir()
+
+    def handle_bookmark_set(self):
+        key = self.prompt("Set bookmark key (a-z): ")
+        if key and len(key) == 1 and key.isalpha():
+            self.bookmarks[key.lower()] = self.cwd
+            self.status_msg = f"Bookmark '{key.lower()}' -> {self.cwd}"
+
+    def handle_bookmark_jump(self):
+        bm_list = ", ".join(f"{k}:{v.name or '/'}" for k, v in sorted(self.bookmarks.items()))
+        key = self.prompt(f"Jump bookmark ({bm_list}): ")
+        if key and key.lower() in self.bookmarks:
+            target = self.bookmarks[key.lower()]
+            self.jump_to_path(str(target))
 
     def get_targets(self):
         if self.selected:
@@ -877,7 +1016,10 @@ class ZosYazi:
             key = self.stdscr.getch()
             self.status_msg = ""
 
-            if key in (ord("q"), 27):
+            if key == curses.KEY_RESIZE:
+                continue
+
+            elif key in (ord("q"), 27):
                 if key == 27 and self.filter_text:
                     self.filter_text = ""
                     self.refresh_dir()
@@ -899,6 +1041,12 @@ class ZosYazi:
 
             elif key == ord("~"):
                 self.jump_to_path(str(Path.home()))
+
+            elif key == ord("m"):
+                self.handle_bookmark_set()
+
+            elif key == ord("'"):
+                self.handle_bookmark_jump()
 
             elif key in (ord("j"), curses.KEY_DOWN):
                 if self.cursor < len(self.entries) - 1:
@@ -943,6 +1091,12 @@ class ZosYazi:
                 cur = self.current_item()
                 if cur:
                     self.open_editor(cur)
+
+            elif key == ord("T"):
+                self.handle_chtag()
+
+            elif key in (ord("!"), ord("X")):
+                self.handle_exec_or_submit()
 
             elif key == ord(" "):
                 cur = self.current_item()
