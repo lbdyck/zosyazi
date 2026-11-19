@@ -40,7 +40,7 @@ import sys
 import time
 from pathlib import Path
 
-__version__ = "1.1.3"
+__version__ = "1.1.4"
 DSFS_ROOT = os.environ.get("ZOSYAZI_DSFS", "/dsfs").rstrip("/")
 
 
@@ -71,17 +71,50 @@ def safe_is_dir(path: Path) -> bool:
         pass
     if is_dsfs_path(path):
         s = str(path).rstrip("/")
-        # /dsfs, /dsfs/txt, /dsfs/bin, /dsfs/rec, /dsfs/txt/HLQ are always directories
         parts = [p for p in s.split("/") if p]
-        # parts: ['dsfs'] or ['dsfs', 'txt'] or ['dsfs', 'txt', 'HLQ']
+        # /dsfs, /dsfs/mode, and /dsfs/mode/HLQ are virtual directory levels
         if len(parts) <= 3:
             return True
+        # Try scandir on path or its uppercase equivalent
         try:
             with os.scandir(path):
                 return True
         except OSError:
-            return False
+            pass
+        # Check uppercase candidate
+        upper_p = get_dsfs_canonical_path(path)
+        if upper_p != path:
+            try:
+                if upper_p.is_dir():
+                    return True
+                with os.scandir(upper_p):
+                    return True
+            except OSError:
+                pass
     return False
+
+
+def get_dsfs_canonical_path(path: Path) -> Path:
+    """Resolve /dsfs paths by testing lowercase, uppercase, and uppercase-qualifier variants."""
+    if not is_dsfs_path(path):
+        return path
+    if path.exists():
+        return path
+
+    parts = [p for p in str(path).split("/") if p]
+    if len(parts) >= 3 and parts[0] == DSFS_ROOT.strip("/") and parts[1] in ("txt", "bin", "rec"):
+        # e.g. parts: ['dsfs', 'txt', 'lbdyck', 'test'] -> upper qualifiers: ['dsfs', 'txt', 'LBDYCK', 'TEST']
+        upper_parts = parts[:2] + [p.upper() for p in parts[2:]]
+        upper_path = Path("/" + "/".join(upper_parts))
+        if upper_path.exists():
+            return upper_path
+        # Check intermediate HLQ capitalization: e.g. /dsfs/txt/LBDYCK/test
+        if len(parts) >= 4:
+            hlq_upper_parts = parts[:2] + [parts[2].upper()] + parts[3:]
+            hlq_upper_path = Path("/" + "/".join(hlq_upper_parts))
+            if hlq_upper_path.exists():
+                return hlq_upper_path
+    return path
 
 
 def get_dsfs_mode(path: Path) -> str:
@@ -488,18 +521,37 @@ class ZosYazi:
 
         resolved = normalize_path(candidate)
         if is_dsfs_path(resolved):
-            # Try lowercase, uppercase, and exact casing for /dsfs paths
-            # In z/OS DSFS, HLQs and datasets are uppercase (e.g. LBDYCK vs lbdyck)
+            resolved = get_dsfs_canonical_path(resolved)
+            # If path does not exist as-is, check if it's a valid HLQ/qualifier in uppercase
             if not resolved.exists() and not safe_is_dir(resolved):
-                parts = str(resolved).split("/")
-                # Convert the dsfs qualifiers (everything after /dsfs/mode/) to uppercase
-                if len(parts) >= 4 and parts[1] == DSFS_ROOT.strip("/") and parts[2] in ("txt", "bin", "rec"):
-                    upper_parts = parts[:3] + [p.upper() for p in parts[3:]]
-                    upper_candidate = normalize_path(Path("/" + "/".join(upper_parts)))
+                parts = [p for p in str(resolved).split("/") if p]
+                if len(parts) >= 3 and parts[0] == DSFS_ROOT.strip("/") and parts[1] in ("txt", "bin", "rec"):
+                    upper_candidate = Path("/" + "/".join(parts[:2] + [p.upper() for p in parts[2:]]))
                     if upper_candidate.exists() or safe_is_dir(upper_candidate):
                         resolved = upper_candidate
 
-        if not resolved.exists() and not safe_is_dir(resolved):
+        # Check existence or directory status
+        is_directory = safe_is_dir(resolved)
+        exists = resolved.exists() or is_directory
+
+        if not exists:
+            # Check if parent exists and target is a file or dataset inside parent
+            parent_canonical = get_dsfs_canonical_path(resolved.parent) if is_dsfs_path(resolved) else resolved.parent
+            if parent_canonical.exists() or safe_is_dir(parent_canonical):
+                target_upper = resolved.name.upper()
+                # Check if file exists in parent with uppercase or exact name
+                candidate_file = parent_canonical / resolved.name
+                candidate_upper_file = parent_canonical / target_upper
+                if candidate_file.exists():
+                    resolved = candidate_file
+                    exists = True
+                    is_directory = safe_is_dir(resolved)
+                elif candidate_upper_file.exists():
+                    resolved = candidate_upper_file
+                    exists = True
+                    is_directory = safe_is_dir(resolved)
+
+        if not exists and not is_directory:
             self.status_msg = f"Path not found: {resolved}"
             return
 
@@ -507,7 +559,8 @@ class ZosYazi:
         self.filter_text = ""
         if is_dsfs_path(resolved):
             self.show_popup("z/OS DSFS", f"Accessing {resolved.name or resolved}...")
-        if safe_is_dir(resolved):
+
+        if is_directory:
             self.cwd = resolved
             self.refresh_dir()
             self.status_msg = f"Jumped to {self.cwd}"

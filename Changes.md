@@ -4,6 +4,13 @@ All notable changes to `zosyazi` are documented in this file.
 
 ---
 
+## [1.1.4] - 2026-11-19
+
+### Fixed
+- **Multi-Level DSFS Casing Resolution (`get_dsfs_canonical_path`):** Added comprehensive recursive uppercase and qualifier fallback checking so paths like `c /dsfs/txt/lbdyck/test` seamlessly resolve to `/dsfs/txt/LBDYCK/TEST` or `/dsfs/txt/LBDYCK/test` whether they are intermediate qualifier directories, PDS libraries, or sequential files.
+
+---
+
 ## [1.1.3] - 2026-11-19
 
 ### Fixed
