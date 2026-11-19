@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/bin/sh
+"exec" "python3" "$0" "$@"
 # SPDX-License-Identifier: MIT
 """
 zosyazi.py - A lightweight, zero-dependency Yazi-inspired terminal file manager
@@ -39,7 +40,7 @@ import sys
 import time
 from pathlib import Path
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 DSFS_ROOT = os.environ.get("ZOSYAZI_DSFS", "/dsfs").rstrip("/")
 
 
