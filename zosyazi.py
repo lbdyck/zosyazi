@@ -249,8 +249,8 @@ class ZosYazi:
         self,
         stdscr,
         start_dir: Path,
-        cwd_file: str = None,
-        initial_select: str = None,
+        cwd_file: str | None = None,
+        initial_select: str | None = None,
     ):
         self.stdscr = stdscr
         self.cwd = normalize_path(start_dir)
@@ -296,6 +296,36 @@ class ZosYazi:
             curses.init_pair(5, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Header / Footer
             curses.init_pair(6, curses.COLOR_RED, -1)        # Errors / Git Deleted / Untracked
             curses.init_pair(7, curses.COLOR_MAGENTA, -1)    # DSFS / Tags / Metadata
+            curses.init_pair(8, curses.COLOR_WHITE, curses.COLOR_BLUE)   # Modal popup dialog
+
+    def show_popup(self, title: str, message: str):
+        """Draw a centered modal popup box for long-running operations."""
+        h, w = self.stdscr.getmaxyx()
+        if h < 8 or w < 34:
+            return
+        box_w = min(max(len(title), len(message)) + 8, w - 4, 60)
+        box_h = 5
+        top_y = max(1, (h - box_h) // 2)
+        left_x = max(1, (w - box_w) // 2)
+
+        attr = curses.color_pair(8) | curses.A_BOLD
+
+        # Draw box background & borders
+        safe_addstr(self.stdscr, top_y, left_x, "+" + ("-" * (box_w - 2)) + "+", attr)
+        title_str = f" {title} "
+        safe_addstr(self.stdscr, top_y, left_x + max(1, (box_w - len(title_str)) // 2), title_str, attr)
+
+        for r in range(1, box_h - 1):
+            safe_addstr(self.stdscr, top_y + r, left_x, "|" + (" " * (box_w - 2)) + "|", attr)
+
+        safe_addstr(self.stdscr, top_y + box_h - 1, left_x, "+" + ("-" * (box_w - 2)) + "+", attr)
+
+        # Center message text
+        msg_str = message[: box_w - 4]
+        msg_x = left_x + max(1, (box_w - len(msg_str)) // 2)
+        safe_addstr(self.stdscr, top_y + 2, msg_x, msg_str, attr)
+
+        self.stdscr.refresh()
 
     def list_dir(self, directory: Path, apply_filter: bool = False):
         try:
@@ -314,7 +344,10 @@ class ZosYazi:
         except OSError:
             return []
 
-    def refresh_dir(self, select_name: str = None):
+    def refresh_dir(self, select_name: str | None = None):
+        if is_dsfs_path(self.cwd):
+            self.show_popup("z/OS DSFS", f"Reading {self.cwd.name or self.cwd}...")
+
         self.entries = self.list_dir(self.cwd, apply_filter=True)
         if self.cwd.parent != self.cwd:
             self.parent_entries = self.list_dir(self.cwd.parent, apply_filter=False)
@@ -347,6 +380,8 @@ class ZosYazi:
     def go_up(self):
         """Move up to the parent directory."""
         if self.cwd.parent != self.cwd:
+            if is_dsfs_path(self.cwd.parent):
+                self.show_popup("z/OS DSFS", f"Loading {self.cwd.parent.name or self.cwd.parent}...")
             old_name = self.cwd.name
             self.cwd = self.cwd.parent
             self.filter_text = ""
@@ -371,6 +406,8 @@ class ZosYazi:
 
         self.history[str(self.cwd)] = self.cursor
         self.filter_text = ""
+        if is_dsfs_path(resolved):
+            self.show_popup("z/OS DSFS", f"Accessing {resolved.name or resolved}...")
         if safe_is_dir(resolved):
             self.cwd = resolved
             self.refresh_dir()
@@ -407,6 +444,10 @@ class ZosYazi:
         lines = []
         dsfs = is_dsfs_path(path)
         dsfs_mode = get_dsfs_mode(path) if dsfs else ""
+
+        if dsfs:
+            # Inform user if reading a /dsfs directory or dataset takes time
+            self.status_msg = f"Reading DSFS: {path.name}..."
 
         try:
             if safe_is_dir(path):
@@ -614,7 +655,7 @@ class ZosYazi:
         extra = []
         if self.selected:
             extra.append(f"Sel:{len(self.selected)}")
-        if self.clipboard:
+        if self.clipboard and self.clipboard_mode:
             extra.append(f"{self.clipboard_mode.upper()}:{len(self.clipboard)}")
         if self.status_msg:
             extra.append(self.status_msg)
@@ -743,6 +784,9 @@ class ZosYazi:
         dsfs_mode = get_dsfs_mode(path) if dsfs else ""
         tag = self.get_tag_cached(path)
 
+        if dsfs:
+            self.show_popup("z/OS DSFS Viewer", f"Loading dataset {path.name}...")
+
         try:
             with open(path, "rb") as f:
                 raw = f.read(512 * 1024)  # Cap at 512 KB for responsiveness
@@ -843,20 +887,22 @@ class ZosYazi:
             self.preview_cache = ("", [])
             self.git_branch, self.git_status = get_git_info(self.cwd)
 
-    def handle_chtag(self, target_path: Path = None):
+    def handle_chtag(self, target_path: Path | None = None):
         """Interactive z/OS chtag file tagging tool."""
         if target_path is None:
             cur = self.current_item()
             if not cur or cur.name == "..":
                 return
-            target_path = cur
+            target = cur
+        else:
+            target = target_path
 
-        if is_dsfs_path(target_path):
+        if is_dsfs_path(target):
             self.status_msg = "chtag is not applicable to /dsfs paths"
             return
 
-        current_tag = self.get_tag_cached(target_path) or "untagged"
-        prompt_txt = f"chtag ({target_path.name} is {current_tag}) [1=ISO8859-1, 2=IBM-1047, 3=UTF-8, 4=Remove, 5=Custom]: "
+        current_tag = self.get_tag_cached(target) or "untagged"
+        prompt_txt = f"chtag ({target.name} is {current_tag}) [1=ISO8859-1, 2=IBM-1047, 3=UTF-8, 4=Remove, 5=Custom]: "
         choice = self.prompt(prompt_txt)
         if not choice:
             self.status_msg = "chtag cancelled"
@@ -864,17 +910,17 @@ class ZosYazi:
 
         cmd = None
         if choice == "1":
-            cmd = ["chtag", "-tc", "ISO8859-1", str(target_path)]
+            cmd = ["chtag", "-tc", "ISO8859-1", str(target)]
         elif choice == "2":
-            cmd = ["chtag", "-tc", "IBM-1047", str(target_path)]
+            cmd = ["chtag", "-tc", "IBM-1047", str(target)]
         elif choice == "3":
-            cmd = ["chtag", "-tc", "UTF-8", str(target_path)]
+            cmd = ["chtag", "-tc", "UTF-8", str(target)]
         elif choice == "4":
-            cmd = ["chtag", "-r", str(target_path)]
+            cmd = ["chtag", "-r", str(target)]
         elif choice == "5":
             custom_ccs = self.prompt("Enter CCSID or encoding name (e.g. IBM-1047, ISO8859-1, 819): ")
             if custom_ccs:
-                cmd = ["chtag", "-tc", custom_ccs, str(target_path)]
+                cmd = ["chtag", "-tc", custom_ccs, str(target)]
         else:
             self.status_msg = "Invalid chtag option"
             return
@@ -883,8 +929,8 @@ class ZosYazi:
             try:
                 res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2.0)
                 if res.returncode == 0:
-                    self.tag_cache.pop(str(target_path), None)
-                    new_tag = self.get_tag_cached(target_path)
+                    self.tag_cache.pop(str(target), None)
+                    new_tag = self.get_tag_cached(target)
                     self.preview_cache = ("", [])
                     self.status_msg = f"Tagged as {new_tag or 'untagged'}"
                 else:

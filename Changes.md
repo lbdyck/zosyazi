@@ -15,6 +15,7 @@ All notable changes to `zosyazi` are documented in this file.
 - **Disk Space & Filesystem Info:** Shows free filesystem space `[free:...]` in the header bar for z/OS UNIX file systems.
 - **File Ownership & Group Display:** Displays `user:group` owner names (via `pwd` and `grp` mapping) in the status line.
 - **Terminal Resize Handling:** Added dynamic redraw handling for `curses.KEY_RESIZE` across list, viewer, and tutorial modes.
+- **DSFS Status Popup:** Centered modal popup dialog (`[z/OS DSFS Loading...]`) during long-running `/dsfs/` operations (directory traversal, navigation, dataset loading, and full-screen viewing).
 
 ### Performance & Optimization
 - **Directory Tag Batching:** Batch-caches `ls -T` file tags for the entire directory during `refresh_dir` to dramatically reduce `fork()` / `exec()` subprocess overhead on z/OS USS.

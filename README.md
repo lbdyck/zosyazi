@@ -16,7 +16,7 @@ A lightweight, zero-dependency, Yazi-inspired terminal file manager written in P
 * **Interactive z/OS File Tagging (`T`):** Inspect and set file tags (`chtag -tc ISO8859-1`, `IBM-1047`, `UTF-8`, custom CCSID, or untag `-r`) directly from the browser or viewer.
 * **Batch JCL Submission & Shell Execution (`!` / `X`):** Automatically detects `.jcl`, `.cntl`, and `.job` files and prompts to submit them to JES via `/bin/submit`. Also allows executing arbitrary shell commands with `%f` and `%F` substitutions.
 * **Directory Bookmarks (`m` / `'`):** Set bookmarks with `m<letter>` and quickly jump between directories with `'<letter>` (includes predefined quick jumps for Home `h`, Root `r`, `/tmp` `t`, and `/dsfs/txt` `d`).
-* **z/OS `/dsfs` Support:** Handles virtual `/dsfs` HLQ directories cleanly, displays `[DSFS:TXT|BIN|REC]` badges in the header, previews `/dsfs/txt` as text and `/dsfs/bin` as hex + ASCII, and skips unnecessary `git` and `ls -T` calls inside `/dsfs`.
+* **z/OS `/dsfs` Support:** Handles virtual `/dsfs` HLQ directories cleanly, displays `[DSFS:TXT|BIN|REC]` badges in the header, previews `/dsfs/txt` as text and `/dsfs/bin` as hex + ASCII, provides centered visual status popups while accessing datasets, and skips unnecessary `git` and `ls -T` calls inside `/dsfs`.
 * **Git Integration:** Displays the active branch (`[git:branch]`) in the header and color-coded status badges (`M`, `A`, `D`, `?`, `R`) next to files and parent directories.
 * **z/OS USS Optimized Performance:** Employs batch-caching for directory tags (`ls -T <dir>`) to eliminate `fork()` / `exec()` overhead on z/OS.
 * **Interactive F1 Tutorial:** Press `F1` or `?` for a color-coded, scrollable help guide.
