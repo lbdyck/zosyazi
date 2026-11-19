@@ -4,6 +4,13 @@ All notable changes to `zosyazi` are documented in this file.
 
 ---
 
+## [1.1.3] - 2026-11-19
+
+### Fixed
+- **DSFS Virtual Path & Uppercase Resolution:** Fixed path jumping (`c` and CLI argument) in `/dsfs/` to properly recognize HLQs (e.g. `/dsfs/txt/lbdyck/test` or `/dsfs/txt/LBDYCK`) as virtual directories without requiring `.pds` extensions or strict case matching.
+
+---
+
 ## [1.1.2] - 2026-11-19
 
 ### Added

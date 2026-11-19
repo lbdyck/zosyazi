@@ -40,7 +40,7 @@ import sys
 import time
 from pathlib import Path
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 DSFS_ROOT = os.environ.get("ZOSYAZI_DSFS", "/dsfs").rstrip("/")
 
 
@@ -70,6 +70,12 @@ def safe_is_dir(path: Path) -> bool:
     except OSError:
         pass
     if is_dsfs_path(path):
+        s = str(path).rstrip("/")
+        # /dsfs, /dsfs/txt, /dsfs/bin, /dsfs/rec, /dsfs/txt/HLQ are always directories
+        parts = [p for p in s.split("/") if p]
+        # parts: ['dsfs'] or ['dsfs', 'txt'] or ['dsfs', 'txt', 'HLQ']
+        if len(parts) <= 3:
+            return True
         try:
             with os.scandir(path):
                 return True
@@ -481,6 +487,18 @@ class ZosYazi:
             candidate = self.cwd / candidate
 
         resolved = normalize_path(candidate)
+        if is_dsfs_path(resolved):
+            # Try lowercase, uppercase, and exact casing for /dsfs paths
+            # In z/OS DSFS, HLQs and datasets are uppercase (e.g. LBDYCK vs lbdyck)
+            if not resolved.exists() and not safe_is_dir(resolved):
+                parts = str(resolved).split("/")
+                # Convert the dsfs qualifiers (everything after /dsfs/mode/) to uppercase
+                if len(parts) >= 4 and parts[1] == DSFS_ROOT.strip("/") and parts[2] in ("txt", "bin", "rec"):
+                    upper_parts = parts[:3] + [p.upper() for p in parts[3:]]
+                    upper_candidate = normalize_path(Path("/" + "/".join(upper_parts)))
+                    if upper_candidate.exists() or safe_is_dir(upper_candidate):
+                        resolved = upper_candidate
+
         if not resolved.exists() and not safe_is_dir(resolved):
             self.status_msg = f"Path not found: {resolved}"
             return
