@@ -4,6 +4,13 @@ All notable changes to `zosyazi` are documented in this file.
 
 ---
 
+## [1.1.2] - 2026-11-19
+
+### Added
+- **Intelligent EBCDIC / ASCII Auto-Detection (`decode_text_buffer`):** Enhanced preview pane and full-screen viewer with heuristic detection of EBCDIC (`cp1047`) vs. UTF-8/ASCII for `/dsfs/txt/` datasets and untagged USS files, rendering native EBCDIC MVS datasets accurately as text.
+
+---
+
 ## [1.1.1] - 2026-11-19
 
 ### Added

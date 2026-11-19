@@ -1,6 +1,6 @@
 # zosyazi
 
-**Version:** 1.1.1
+**Version:** 1.1.2
 **License:** MIT
 
 A lightweight, zero-dependency, Yazi-inspired terminal file manager written in Python 3 for **z/OS UNIX** (IBM Open Enterprise SDK for Python).

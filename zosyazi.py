@@ -40,7 +40,7 @@ import sys
 import time
 from pathlib import Path
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 DSFS_ROOT = os.environ.get("ZOSYAZI_DSFS", "/dsfs").rstrip("/")
 
 
@@ -208,6 +208,86 @@ def get_git_info(directory: Path):
         return branch, status_map
     except Exception:
         return None, {}
+
+
+def decode_text_buffer(raw: bytes, tag: str = "", dsfs_mode: str = "") -> tuple[list[str] | None, str]:
+    """
+    Intelligently decode raw bytes into lines of text and return (lines, detected_encoding).
+    If the buffer appears to be non-text binary, returns (None, "BINARY").
+    """
+    if not raw:
+        return ["<empty dataset/file>"], "EMPTY"
+
+    if dsfs_mode == "BIN":
+        return None, "DSFS:BIN"
+
+    # 1. Tag explicit overrides
+    if "IBM-1047" in tag:
+        try:
+            return raw.decode("cp1047", errors="replace").splitlines(), "IBM-1047"
+        except Exception:
+            pass
+    elif "UTF-8" in tag:
+        try:
+            return raw.decode("utf-8", errors="replace").splitlines(), "UTF-8"
+        except Exception:
+            pass
+    elif "ISO8859-1" in tag or "819" in tag:
+        try:
+            return raw.decode("latin-1", errors="replace").splitlines(), "ISO8859-1"
+        except Exception:
+            pass
+
+    # 2. Check for null bytes (likely binary)
+    sample = raw[:1024]
+    if b"\x00" in sample:
+        # Check if nulls are just unprintable or if entire buffer is binary
+        printable_ascii = sum(1 for b in sample if 32 <= b <= 126 or b in (9, 10, 13))
+        if printable_ascii / len(sample) < 0.3:
+            return None, "BINARY"
+
+    # 3. For /dsfs/txt or untagged files: test EBCDIC (cp1047) vs UTF-8 / ASCII heuristic
+    # Count printable characters in UTF-8
+    try:
+        utf8_text = raw.decode("utf-8")
+        utf8_printable = sum(1 for ch in utf8_text[:1024] if ch.isprintable() or ch in "\r\n\t")
+        utf8_ratio = utf8_printable / max(1, len(utf8_text[:1024]))
+    except UnicodeDecodeError:
+        utf8_ratio = 0.0
+        utf8_text = ""
+
+    # Count printable characters in EBCDIC (cp1047)
+    try:
+        ebcdic_text = raw.decode("cp1047")
+        ebcdic_printable = sum(1 for ch in ebcdic_text[:1024] if ch.isprintable() or ch in "\r\n\t")
+        ebcdic_ratio = ebcdic_printable / max(1, len(ebcdic_text[:1024]))
+    except Exception:
+        ebcdic_ratio = 0.0
+        ebcdic_text = ""
+
+    # In /dsfs/txt/, MVS datasets are typically natively EBCDIC unless autoconverted
+    if dsfs_mode == "TXT":
+        if ebcdic_ratio > 0.70 and ebcdic_ratio >= utf8_ratio:
+            return ebcdic_text.splitlines(), "EBCDIC (IBM-1047)"
+        elif utf8_ratio > 0.70:
+            return (utf8_text or raw.decode("utf-8", errors="replace")).splitlines(), "UTF-8/ASCII"
+        elif ebcdic_ratio > utf8_ratio:
+            return ebcdic_text.splitlines(), "EBCDIC (IBM-1047)"
+        else:
+            return raw.decode("utf-8", errors="replace").splitlines(), "UTF-8"
+
+    # For general USS files: prefer UTF-8 unless EBCDIC is significantly higher
+    if ebcdic_ratio > 0.75 and ebcdic_ratio > utf8_ratio + 0.20:
+        return ebcdic_text.splitlines(), "EBCDIC (IBM-1047)"
+    elif utf8_ratio > 0.50:
+        return (utf8_text or raw.decode("utf-8", errors="replace")).splitlines(), "UTF-8/ASCII"
+    elif ebcdic_ratio > 0.50:
+        return ebcdic_text.splitlines(), "EBCDIC (IBM-1047)"
+
+    # Fallback to UTF-8 with replacement or hex
+    if b"\x00" in sample:
+        return None, "BINARY"
+    return raw.decode("utf-8", errors="replace").splitlines(), "UTF-8"
 
 
 def format_hex_preview(raw: bytes, max_lines: int) -> list:
@@ -465,27 +545,12 @@ class ZosYazi:
                 with open(path, "rb") as f:
                     raw = f.read(8192)
 
-                if not raw:
-                    lines = ["<empty dataset/file>"]
-                elif dsfs and dsfs_mode == "BIN":
+                tag = self.get_tag_cached(path)
+                decoded_lines, enc = decode_text_buffer(raw, tag=tag, dsfs_mode=dsfs_mode)
+                if decoded_lines is None:
                     lines = format_hex_preview(raw, max_lines)
                 else:
-                    tag = self.get_tag_cached(path)
-                    if dsfs and dsfs_mode == "TXT":
-                        text = raw.decode("utf-8", errors="replace")
-                    elif "IBM-1047" in tag:
-                        text = raw.decode("cp1047", errors="replace")
-                    elif "UTF-8" in tag or "ISO8859-1" in tag:
-                        text = raw.decode("utf-8", errors="replace")
-                    else:
-                        if b"\x00" in raw[:512]:
-                            lines = format_hex_preview(raw, max_lines)
-                            text = None
-                        else:
-                            text = raw.decode("utf-8", errors="replace")
-
-                    if text is not None:
-                        lines = text.splitlines()[:max_lines]
+                    lines = decoded_lines[:max_lines]
         except PermissionError:
             lines = ["<permission denied>"]
         except OSError as e:
@@ -791,20 +856,12 @@ class ZosYazi:
         try:
             with open(path, "rb") as f:
                 raw = f.read(512 * 1024)  # Cap at 512 KB for responsiveness
-            if not raw:
-                lines = ["<empty file>"]
-            elif dsfs and dsfs_mode == "BIN":
-                lines = format_hex_preview(raw, 2000)
-            elif dsfs and dsfs_mode == "TXT":
-                lines = raw.decode("utf-8", errors="replace").splitlines()
-            elif "IBM-1047" in tag:
-                lines = raw.decode("cp1047", errors="replace").splitlines()
-            elif "UTF-8" in tag or "ISO8859-1" in tag:
-                lines = raw.decode("utf-8", errors="replace").splitlines()
-            elif b"\x00" in raw[:512]:
+            
+            decoded_lines, enc = decode_text_buffer(raw, tag=tag, dsfs_mode=dsfs_mode)
+            if decoded_lines is None:
                 lines = format_hex_preview(raw, 2000)
             else:
-                lines = raw.decode("utf-8", errors="replace").splitlines()
+                lines = decoded_lines
         except OSError as e:
             self.status_msg = f"View failed: {e.strerror}"
             return
@@ -816,8 +873,8 @@ class ZosYazi:
             body_h = max(1, h - 2)
             max_offset = max(0, len(lines) - body_h)
 
-            tag_info = f" [{tag}]" if tag else ""
-            title = f" VIEW: {path.name}{tag_info} ({len(lines)} lines) "
+            enc_info = f" [{tag or enc}]" if (tag or enc) else ""
+            title = f" VIEW: {path.name}{enc_info} ({len(lines)} lines) "
             safe_addstr(self.stdscr, 0, 0, title.ljust(w), curses.color_pair(5) | curses.A_BOLD)
 
             for idx, line in enumerate(lines[offset : offset + body_h]):
