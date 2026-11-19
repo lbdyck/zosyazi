@@ -1,43 +1,47 @@
-.\" Manpage for zosyazi
-.\" Contact: https://github.com/
-.TH ZOSYAZI 1 "19 November 2026" "zosyazi 1.1.4" "User Commands"
+.TH ZOSYAZI 1 "2026-11-19" "zosyazi 1.1.5" "User Commands"
 .SH NAME
-zosyazi \- lightweight terminal file manager for z/OS UNIX and /dsfs
+zosyazi \- lightweight, Yazi-inspired terminal file manager for z/OS UNIX
 .SH SYNOPSIS
-.B zosyazi
-[\fIPATH\fR]
-[\fB\-\-cwd\-file\fR=\fIFILE\fR]
-[\fB\-V\fR | \fB\-\-version\fR]
-[\fB\-h\fR | \fB\-\-help\fR]
-
+.B zosyazi.py
+[\fIOPTIONS\fR] [\fIPATH\fR]
 .SH DESCRIPTION
 .B zosyazi
-is a zero-dependency, Yazi-inspired terminal file manager designed specifically for
-\fBz/OS UNIX System Services (USS)\fR and the IBM Open Enterprise SDK for Python.
-It features a 3-column Miller layout, Vim-style keybindings, Git branch/status badges,
-and native awareness for \fBz/OS /dsfs (Data Set File System)\fR and \fBfile tags (ls \-T / chtag)\fR.
-
-.SH ARGUMENTS
-.TP
-.I PATH
-Initial directory or file to open. Defaults to the current working directory (\fB.\fR).
-Accepts absolute paths, relative paths, environment variables (e.g. \fI$HOME\fR),
-and z/OS \fI/dsfs\fR paths (e.g. \fI/dsfs/txt/USER.*\fR).
-
+is a zero-dependency Python 3 terminal file manager built for z/OS UNIX
+(IBM Open Enterprise SDK for Python) using the standard \fBcurses\fR library.
+It provides a three-column Miller layout (parent directory, current directory,
+and live preview), Vim-style navigation, a built-in EBCDIC/ASCII-safe
+full-screen file viewer, interactive \fBchtag\fR file tagging, JCL job
+submission, Git branch and status badges, directory bookmarks, and native
+z/OS \fB/dsfs\fR (Data Set File System) awareness.
 .SH OPTIONS
 .TP
-.BI \-\-cwd\-file= FILE
-Write the final working directory to \fIFILE\fR upon exit. Useful for shell wrapper scripts to
-automatically change the active shell directory to the directory browsed inside \fBzosyazi\fR.
+.I PATH
+Initial directory, file, or \fB/dsfs\fR qualifier path to open (defaults to
+the current working directory). Expands \fB~\fR and environment variables
+(such as \fB$HOME\fR). If a file is specified, opens its parent directory
+with that file highlighted. If a non-existent \fB/dsfs/<mode>/<hlq>/<qualifier>\fR
+path is specified, opens \fB/dsfs/<mode>/<hlq>\fR with a strict prefix filter
+(\fB<qualifier>.*\fR).
+.TP
+.BI \-\-cwd\-file " FILE"
+Write the final working directory to \fIFILE\fR on exit. Used by the shell
+integration wrapper to change the parent shell's working directory on exit.
 .TP
 .BR \-V ", " \-\-version
-Show the program's version number and exit.
+Display the version number and exit.
 .TP
 .BR \-h ", " \-\-help
-Show the command-line help message and exit.
-
+Display command-line usage help and exit.
+.SH ENVIRONMENT
+.TP
+.B ZOSYAZI_DSFS
+Override the default DSFS mount point (default: \fB/dsfs\fR).
+.TP
+.B EDITOR
+External editor launched when pressing \fBe\fR. If unset, \fBzosyazi\fR
+prefers ASCII-native editors (\fBvim\fR, \fBnano\fR) over EBCDIC
+\fB/bin/vi\fR to avoid garbling ASCII SSH terminals.
 .SH KEYBINDINGS
-
 .SS Navigation
 .TP
 .BR j ", " Down
@@ -47,106 +51,146 @@ Move cursor down.
 Move cursor up.
 .TP
 .BR h ", " H ", " Left ", " Backspace
-Move up to the parent directory (or activate the \fB..\fR entry).
+Move up to parent directory (or select \fB..\fR and press Enter).
 .TP
 .BR l ", " Right ", " Enter
-Enter the highlighted directory or open the highlighted file in the built-in viewer.
+Enter directory or open file in the built-in viewer.
 .TP
 .B v
-Open the highlighted file directly in the built-in full-screen file viewer.
+View current file in the built-in full-screen viewer.
 .TP
-.BR g " / " G
-Jump to the top / bottom of the directory listing.
+.BR g ", " G
+Jump to top or bottom of the directory list.
 .TP
 .B c
-Prompt for a new path to jump directly to (supports environment variables and \fI~\fR).
+Change top-level path interactively (supports environment variables, \fB~\fR,
+and \fB/dsfs\fR qualifier auto-filtering).
 .TP
 .B ~
-Jump directly to the user's home directory.
+Jump directly to the home directory.
 .TP
-.BR m\fIkey\fR " / " '\fIkey\fR
-Set bookmark (\fBm\fR followed by a letter) or jump to bookmark (\fB'\fR followed by a letter).
-Predefined bookmarks: \fBh\fR (home), \fBr\fR (/), \fBt\fR (/tmp), \fBd\fR (/dsfs/txt).
+.BR m \fI<key>\fR ", " ' \fI<key>\fR
+Set or jump to a directory bookmark. Predefined bookmarks: \fBh\fR (home),
+\fBr\fR (/), \fBt\fR (/tmp), \fBd\fR (/dsfs/txt).
 .TP
-.BR / " then " Esc
-Filter current directory listing / clear active filter.
+.BR / ", " Esc
+Filter current directory (\fBEsc\fR clears the active filter).
 .TP
 .B .
-Toggle display of hidden files (dotfiles).
-
-.SS File Operations
+Toggle hidden dotfiles.
+.SS File and z/OS Operations
 .TP
 .B Space
-Toggle selection mark on the highlighted item (supports multi-item operations).
+Toggle multi-select on the current item.
 .TP
-.BR y " / " x " / " p
-Yank (copy) / Cut / Paste selected or highlighted items.
+.BR y ", " x ", " p
+Copy (yank), cut, or paste selected or highlighted items.
 .TP
 .B d
-Delete selected items or current item (with confirmation).
+Delete selected or highlighted items (with confirmation).
 .TP
 .B r
-Rename the highlighted item.
+Rename highlighted item.
 .TP
 .B a
-Create a new file or directory (end the name with \fB/\fR to create a directory).
+Create a file (end the name with \fB/\fR to create a directory).
 .TP
 .B e
-Open the highlighted file in \fB$EDITOR\fR (falls back to \fBvim\fR, \fBnano\fR, or \fBvi\fR).
-Curses mode is cleanly suspended and restored.
+Open highlighted file in \fB$EDITOR\fR.
 .TP
 .B T
-Open the interactive z/OS file tagging prompt (\fBchtag\fR) to switch encoding
-between ISO8859-1 (ASCII), IBM-1047 (EBCDIC), UTF-8, custom CCSID, or remove tagging.
+Interactive \fBchtag\fR z/OS file tagging (ISO8859-1, IBM-1047, UTF-8,
+custom CCSID, or remove tag).
 .TP
-.BR ! " or " X
-Execute a shell command with the current item, or submit as a batch JCL job if the
-file ends in \fI.jcl\fR, \fI.cntl\fR, or \fI.job\fR. In command prompts, \fB%f\fR is replaced
-by the filename and \fB%F\fR is replaced by the full path.
-
+.BR ! ", " X
+Execute a shell command (\fB%f\fR = filename, \fB%F\fR = full path) or
+submit \fB.jcl\fR, \fB.cntl\fR, or \fB.job\fR files via \fB/bin/submit\fR.
+.SS Built-In Viewer (v / Enter)
+.TP
+.BR j ", " k ", " Down ", " Up
+Scroll down or up one line.
+.TP
+.BR PgDn ", " Space ", " PgUp ", " b
+Scroll down or up one page.
+.TP
+.BR g ", " G
+Jump to top or bottom of file.
+.TP
+.B e
+Open current file in \fB$EDITOR\fR.
+.TP
+.B T
+Manage z/OS file tag (\fBchtag\fR).
+.TP
+.BR q ", " Esc ", " h ", " Left
+Return to directory view.
 .SS General
 .TP
 .BR q ", " Esc
 Quit \fBzosyazi\fR.
 .TP
 .BR F1 ", " ?
-Toggle the interactive, color-coded help tutorial.
-
-.SH Z/OS & DSFS INTEGRATION
-.B zosyazi
-includes custom handling for z/OS specific concepts:
-.IP \(bu 2
-\fB/dsfs Awareness:\fR Prevents realpath resolution from breaking virtual HLQ directories
-in \fI/dsfs/txt\fR, \fI/dsfs/bin\fR, and \fI/dsfs/rec\fR, and displays visual status popup
-indicators when loading or navigating large datasets.
-.IP \(bu 2
-\fBHex & ASCII Dump:\fR Binary files and \fI/dsfs/bin\fR files are automatically rendered as
-offset, hexadecimal, and ASCII representation in previews and the viewer.
-.IP \(bu 2
-\fBEBCDIC / ASCII Decoding:\fR Files tagged as \fIIBM-1047\fR are decoded using \fIcp1047\fR,
-while ASCII and UTF-8 files are decoded accordingly.
-.IP \(bu 2
-\fBPerformance Caching:\fR Batch-fetches file tags across directories using \fIls \-T\fR to
-eliminate per-item subprocess overhead on z/OS USS.
-
-.SH ENVIRONMENT
-.TP
-.B ZOSYAZI_DSFS
-Root mount point for the Data Set File System (defaults to \fI/dsfs\fR).
-.TP
-.B EDITOR
-Specifies the editor to use when pressing \fBe\fR.
-.TP
-.B HOME
-Used for the home directory jump (\fB~\fR).
-
+Open or close the colored, scrollable interactive tutorial.
+.SH SHELL INTEGRATION
+To automatically \fBcd\fR to the last browsed directory on exit, add the
+following POSIX-compatible wrapper function to \fB~/.profile\fR,
+\fB~/.bashrc\fR, or \fB~/.zshrc\fR:
+.PP
+.nf
+yy() {
+    _zosyazi_tmp="$(mktemp -t zosyazi-cwd.XXXXXX)"
+    zosyazi.py --cwd-file="$_zosyazi_tmp" "$@"
+    if [ -f "$_zosyazi_tmp" ]; then
+        _zosyazi_dir="$(cat -- "$_zosyazi_tmp")"
+        rm -f -- "$_zosyazi_tmp"
+        if [ -n "$_zosyazi_dir" ] && [ -d "$_zosyazi_dir" ] && [ "$_zosyazi_dir" != "$PWD" ]; then
+            cd -- "$_zosyazi_dir"
+        fi
+    fi
+    unset _zosyazi_tmp _zosyazi_dir
+}
+.fi
+.SH EXAMPLES
+.PP
+Open the current working directory:
+.nf
+    zosyazi.py
+.fi
+.PP
+Open a specific directory or pre-select a file:
+.nf
+    zosyazi.py ~/projects/zosyazi
+    zosyazi.py ~/.profile
+.fi
+.PP
+Browse all MVS datasets under an HLQ in text mode:
+.nf
+    zosyazi.py /dsfs/txt/lbdyck
+.fi
+.PP
+Auto-filter an HLQ to datasets starting with a qualifier (LBDYCK.TEST.*):
+.nf
+    zosyazi.py /dsfs/txt/lbdyck/test
+.fi
+.PP
+Open a specific PDS directly to browse its members:
+.nf
+    zosyazi.py /dsfs/txt/lbdyck/test.pds
+.fi
+.PP
+Inspect datasets in binary mode (Hex + ASCII preview and viewer):
+.nf
+    zosyazi.py /dsfs/bin/lbdyck
+.fi
+.PP
+Launch with shell cd-on-exit integration:
+.nf
+    yy /dsfs/txt/lbdyck
+.fi
 .SH SEE ALSO
-.BR chtag (1),
 .BR ls (1),
+.BR chtag (1),
 .BR submit (1),
 .BR git (1)
-
-.SH AUTHORS
-Written for z/OS UNIX by Lionel B. Dyck and contributors.
 .SH LICENSE
-MIT License.
+MIT License. Copyright (c) 2026.

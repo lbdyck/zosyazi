@@ -4,6 +4,17 @@ All notable changes to `zosyazi` are documented in this file.
 
 ---
 
+## [1.1.5] - 2026-11-19
+
+### Added
+- **DSFS Qualifier Auto-Filter (`resolve_dsfs_qualifier_fallback`):** Jumping to a non-existent `/dsfs/<mode>/<hlq>/<qualifier>` path via `c` or the CLI startup argument now opens `/dsfs/<mode>/<hlq>` with a strict prefix filter (`<qualifier>.*`) so only datasets matching that qualifier are listed.
+
+### Fixed
+- **Prefix-Only Qualifier Filtering:** Added `filter_prefix` matching in `list_dir()` so DSFS qualifier filters match only the start of dataset names (`startswith`) instead of matching substrings anywhere in the name.
+- **Footer Status Visibility:** Updated `draw()` so right-aligned status and error messages are always preserved and never truncated off the right edge of the terminal by long file metadata strings.
+
+---
+
 ## [1.1.4] - 2026-11-19
 
 ### Fixed

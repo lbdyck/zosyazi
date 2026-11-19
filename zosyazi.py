@@ -40,7 +40,7 @@ import sys
 import time
 from pathlib import Path
 
-__version__ = "1.1.4"
+__version__ = "1.1.5"
 DSFS_ROOT = os.environ.get("ZOSYAZI_DSFS", "/dsfs").rstrip("/")
 
 
@@ -103,18 +103,33 @@ def get_dsfs_canonical_path(path: Path) -> Path:
 
     parts = [p for p in str(path).split("/") if p]
     if len(parts) >= 3 and parts[0] == DSFS_ROOT.strip("/") and parts[1] in ("txt", "bin", "rec"):
-        # e.g. parts: ['dsfs', 'txt', 'lbdyck', 'test'] -> upper qualifiers: ['dsfs', 'txt', 'LBDYCK', 'TEST']
         upper_parts = parts[:2] + [p.upper() for p in parts[2:]]
         upper_path = Path("/" + "/".join(upper_parts))
         if upper_path.exists():
             return upper_path
-        # Check intermediate HLQ capitalization: e.g. /dsfs/txt/LBDYCK/test
         if len(parts) >= 4:
             hlq_upper_parts = parts[:2] + [parts[2].upper()] + parts[3:]
             hlq_upper_path = Path("/" + "/".join(hlq_upper_parts))
             if hlq_upper_path.exists():
                 return hlq_upper_path
     return path
+
+
+def resolve_dsfs_qualifier_fallback(path: Path) -> tuple[Path, str] | None:
+    """
+    If a /dsfs/<mode>/<hlq>/<qualifier...> path does not exist as a dataset,
+    return (hlq_dir, 'qualifier.') so the caller can open the HLQ directory
+    with a prefix filter. Returns None if not applicable.
+    """
+    if not is_dsfs_path(path):
+        return None
+    parts = [p for p in str(path).split("/") if p]
+    if len(parts) >= 4 and parts[0] == DSFS_ROOT.strip("/") and parts[1] in ("txt", "bin", "rec"):
+        hlq_dir = get_dsfs_canonical_path(Path("/" + "/".join(parts[:3])))
+        prefix = ".".join(parts[3:]).rstrip(".")
+        if prefix and (hlq_dir.exists() or safe_is_dir(hlq_dir)):
+            return hlq_dir, prefix + "."
+    return None
 
 
 def get_dsfs_mode(path: Path) -> str:
@@ -260,7 +275,6 @@ def decode_text_buffer(raw: bytes, tag: str = "", dsfs_mode: str = "") -> tuple[
     if dsfs_mode == "BIN":
         return None, "DSFS:BIN"
 
-    # 1. Tag explicit overrides
     if "IBM-1047" in tag:
         try:
             return raw.decode("cp1047", errors="replace").splitlines(), "IBM-1047"
@@ -277,16 +291,12 @@ def decode_text_buffer(raw: bytes, tag: str = "", dsfs_mode: str = "") -> tuple[
         except Exception:
             pass
 
-    # 2. Check for null bytes (likely binary)
     sample = raw[:1024]
     if b"\x00" in sample:
-        # Check if nulls are just unprintable or if entire buffer is binary
         printable_ascii = sum(1 for b in sample if 32 <= b <= 126 or b in (9, 10, 13))
         if printable_ascii / len(sample) < 0.3:
             return None, "BINARY"
 
-    # 3. For /dsfs/txt or untagged files: test EBCDIC (cp1047) vs UTF-8 / ASCII heuristic
-    # Count printable characters in UTF-8
     try:
         utf8_text = raw.decode("utf-8")
         utf8_printable = sum(1 for ch in utf8_text[:1024] if ch.isprintable() or ch in "\r\n\t")
@@ -295,7 +305,6 @@ def decode_text_buffer(raw: bytes, tag: str = "", dsfs_mode: str = "") -> tuple[
         utf8_ratio = 0.0
         utf8_text = ""
 
-    # Count printable characters in EBCDIC (cp1047)
     try:
         ebcdic_text = raw.decode("cp1047")
         ebcdic_printable = sum(1 for ch in ebcdic_text[:1024] if ch.isprintable() or ch in "\r\n\t")
@@ -304,7 +313,6 @@ def decode_text_buffer(raw: bytes, tag: str = "", dsfs_mode: str = "") -> tuple[
         ebcdic_ratio = 0.0
         ebcdic_text = ""
 
-    # In /dsfs/txt/, MVS datasets are typically natively EBCDIC unless autoconverted
     if dsfs_mode == "TXT":
         if ebcdic_ratio > 0.70 and ebcdic_ratio >= utf8_ratio:
             return ebcdic_text.splitlines(), "EBCDIC (IBM-1047)"
@@ -315,7 +323,6 @@ def decode_text_buffer(raw: bytes, tag: str = "", dsfs_mode: str = "") -> tuple[
         else:
             return raw.decode("utf-8", errors="replace").splitlines(), "UTF-8"
 
-    # For general USS files: prefer UTF-8 unless EBCDIC is significantly higher
     if ebcdic_ratio > 0.75 and ebcdic_ratio > utf8_ratio + 0.20:
         return ebcdic_text.splitlines(), "EBCDIC (IBM-1047)"
     elif utf8_ratio > 0.50:
@@ -323,7 +330,6 @@ def decode_text_buffer(raw: bytes, tag: str = "", dsfs_mode: str = "") -> tuple[
     elif ebcdic_ratio > 0.50:
         return ebcdic_text.splitlines(), "EBCDIC (IBM-1047)"
 
-    # Fallback to UTF-8 with replacement or hex
     if b"\x00" in sample:
         return None, "BINARY"
     return raw.decode("utf-8", errors="replace").splitlines(), "UTF-8"
@@ -371,13 +377,16 @@ class ZosYazi:
         start_dir: Path,
         cwd_file: str | None = None,
         initial_select: str | None = None,
+        initial_filter: str = "",
+        initial_filter_prefix: bool = False,
     ):
         self.stdscr = stdscr
         self.cwd = normalize_path(start_dir)
         self.cwd_file = cwd_file
 
         self.show_hidden = False
-        self.filter_text = ""
+        self.filter_text = initial_filter
+        self.filter_prefix = initial_filter_prefix
         self.entries = []
         self.parent_entries = []
         self.cursor = 0
@@ -398,7 +407,11 @@ class ZosYazi:
         self.git_branch = None
         self.git_status = {}
 
-        self.status_msg = "Press F1 or ? for tutorial"
+        if initial_filter:
+            suffix = "*" if initial_filter_prefix else ""
+            self.status_msg = f"DSFS filter: {initial_filter}{suffix} (Esc to clear)"
+        else:
+            self.status_msg = "Press F1 or ? for tutorial"
         self.tag_cache = {}
         self.preview_cache = ("", [])
 
@@ -430,7 +443,6 @@ class ZosYazi:
 
         attr = curses.color_pair(8) | curses.A_BOLD
 
-        # Draw box background & borders
         safe_addstr(self.stdscr, top_y, left_x, "+" + ("-" * (box_w - 2)) + "+", attr)
         title_str = f" {title} "
         safe_addstr(self.stdscr, top_y, left_x + max(1, (box_w - len(title_str)) // 2), title_str, attr)
@@ -440,7 +452,6 @@ class ZosYazi:
 
         safe_addstr(self.stdscr, top_y + box_h - 1, left_x, "+" + ("-" * (box_w - 2)) + "+", attr)
 
-        # Center message text
         msg_str = message[: box_w - 4]
         msg_x = left_x + max(1, (box_w - len(msg_str)) // 2)
         safe_addstr(self.stdscr, top_y + 2, msg_x, msg_str, attr)
@@ -456,8 +467,12 @@ class ZosYazi:
                     if not self.show_hidden and name.startswith("."):
                         continue
                     if apply_filter and self.filter_text:
-                        if self.filter_text.lower() not in name.lower():
-                            continue
+                        if self.filter_prefix:
+                            if not name.lower().startswith(self.filter_text.lower()):
+                                continue
+                        else:
+                            if self.filter_text.lower() not in name.lower():
+                                continue
                     items.append(Path(entry.path))
             items.sort(key=lambda p: (not safe_is_dir(p), p.name.lower()))
             return items
@@ -471,12 +486,10 @@ class ZosYazi:
         self.entries = self.list_dir(self.cwd, apply_filter=True)
         if self.cwd.parent != self.cwd:
             self.parent_entries = self.list_dir(self.cwd.parent, apply_filter=False)
-            # Pin '..' at the top of the middle pane for easy parent navigation
             self.entries.insert(0, self.cwd / "..")
         else:
             self.parent_entries = []
 
-        # Batch-populate tag cache for performance on z/OS
         batch_tags = get_dir_tags(self.cwd)
         self.tag_cache.update(batch_tags)
 
@@ -505,6 +518,7 @@ class ZosYazi:
             old_name = self.cwd.name
             self.cwd = self.cwd.parent
             self.filter_text = ""
+            self.filter_prefix = False
             self.refresh_dir(select_name=old_name)
             self.status_msg = f"Up to {self.cwd}"
         else:
@@ -522,7 +536,6 @@ class ZosYazi:
         resolved = normalize_path(candidate)
         if is_dsfs_path(resolved):
             resolved = get_dsfs_canonical_path(resolved)
-            # If path does not exist as-is, check if it's a valid HLQ/qualifier in uppercase
             if not resolved.exists() and not safe_is_dir(resolved):
                 parts = [p for p in str(resolved).split("/") if p]
                 if len(parts) >= 3 and parts[0] == DSFS_ROOT.strip("/") and parts[1] in ("txt", "bin", "rec"):
@@ -530,16 +543,13 @@ class ZosYazi:
                     if upper_candidate.exists() or safe_is_dir(upper_candidate):
                         resolved = upper_candidate
 
-        # Check existence or directory status
         is_directory = safe_is_dir(resolved)
         exists = resolved.exists() or is_directory
 
         if not exists:
-            # Check if parent exists and target is a file or dataset inside parent
             parent_canonical = get_dsfs_canonical_path(resolved.parent) if is_dsfs_path(resolved) else resolved.parent
             if parent_canonical.exists() or safe_is_dir(parent_canonical):
                 target_upper = resolved.name.upper()
-                # Check if file exists in parent with uppercase or exact name
                 candidate_file = parent_canonical / resolved.name
                 candidate_upper_file = parent_canonical / target_upper
                 if candidate_file.exists():
@@ -552,11 +562,23 @@ class ZosYazi:
                     is_directory = safe_is_dir(resolved)
 
         if not exists and not is_directory:
+            fallback = resolve_dsfs_qualifier_fallback(resolved)
+            if fallback:
+                hlq_dir, prefix_dot = fallback
+                self.history[str(self.cwd)] = self.cursor
+                self.cwd = hlq_dir
+                self.filter_text = prefix_dot
+                self.filter_prefix = True
+                self.show_popup("z/OS DSFS", f"Filtering {hlq_dir.name} for {prefix_dot}*...")
+                self.refresh_dir()
+                self.status_msg = f"DSFS filter: {prefix_dot}* (Esc to clear)"
+                return
             self.status_msg = f"Path not found: {resolved}"
             return
 
         self.history[str(self.cwd)] = self.cursor
         self.filter_text = ""
+        self.filter_prefix = False
         if is_dsfs_path(resolved):
             self.show_popup("z/OS DSFS", f"Accessing {resolved.name or resolved}...")
 
@@ -598,7 +620,6 @@ class ZosYazi:
         dsfs_mode = get_dsfs_mode(path) if dsfs else ""
 
         if dsfs:
-            # Inform user if reading a /dsfs directory or dataset takes time
             self.status_msg = f"Reading DSFS: {path.name}..."
 
         try:
@@ -676,7 +697,8 @@ class ZosYazi:
         if self.git_branch:
             badges.append(f"[git:{self.git_branch}]")
         if self.filter_text:
-            badges.append(f"[filter:{self.filter_text}]")
+            flt_display = f"{self.filter_text}*" if self.filter_prefix else self.filter_text
+            badges.append(f"[filter:{flt_display}]")
 
         try:
             if not is_dsfs_path(self.cwd):
@@ -764,7 +786,7 @@ class ZosYazi:
                 )
                 safe_addstr(self.stdscr, 1 + idx, right_x, line, attr, right_w)
 
-        # Footer / Status Bar
+        # Footer / Status Bar (keep right_status always visible)
         info = ""
         if cur:
             if cur.name == "..":
@@ -797,9 +819,11 @@ class ZosYazi:
         if self.status_msg:
             extra.append(self.status_msg)
 
-        right_status = " | ".join(extra) + " "
-        pad = max(1, w - len(info) - len(right_status) - 1)
-        full_footer = (info + (" " * pad) + right_status)[: w - 1]
+        right_status = (" " + " | ".join(extra) + " ") if extra else ""
+        avail_info = max(0, (w - 1) - len(right_status))
+        trimmed_info = info[:avail_info]
+        pad = max(0, (w - 1) - len(trimmed_info) - len(right_status))
+        full_footer = (trimmed_info + (" " * pad) + right_status)[: w - 1]
         safe_addstr(self.stdscr, h - 1, 0, full_footer.ljust(w - 1), curses.color_pair(5))
 
         self.stdscr.refresh()
@@ -927,7 +951,7 @@ class ZosYazi:
         try:
             with open(path, "rb") as f:
                 raw = f.read(512 * 1024)  # Cap at 512 KB for responsiveness
-            
+
             decoded_lines, enc = decode_text_buffer(raw, tag=tag, dsfs_mode=dsfs_mode)
             if decoded_lines is None:
                 lines = format_hex_preview(raw, 2000)
@@ -994,7 +1018,6 @@ class ZosYazi:
             return
         editor = os.environ.get("EDITOR")
         if not editor:
-            # Prefer ASCII-native zopen editors over EBCDIC /bin/vi
             for candidate in ("vim", "nano", "vi"):
                 if shutil.which(candidate):
                     editor = candidate
@@ -1074,12 +1097,10 @@ class ZosYazi:
         if not cur or cur.name == "..":
             return
 
-        # Check if file looks like JCL / CNTL
         is_jcl = cur.suffix.lower() in (".jcl", ".cntl", ".job")
         if is_jcl:
             ans = self.prompt(f"Submit '{cur.name}' as JCL job? (y/N/command): ")
             if ans.lower() == "y":
-                # Attempt z/OS submit
                 submit_cmd = shutil.which("submit") or "/bin/submit"
                 try:
                     res = subprocess.run([submit_cmd, str(cur)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5.0)
@@ -1197,6 +1218,7 @@ class ZosYazi:
             elif key in (ord("q"), 27):
                 if key == 27 and self.filter_text:
                     self.filter_text = ""
+                    self.filter_prefix = False
                     self.refresh_dir()
                     continue
                 if self.cwd_file:
@@ -1253,6 +1275,7 @@ class ZosYazi:
                     self.history[str(self.cwd)] = self.cursor
                     self.cwd = normalize_path(cur)
                     self.filter_text = ""
+                    self.filter_prefix = False
                     self.refresh_dir()
                 elif cur:
                     self.view_file(cur)
@@ -1334,6 +1357,7 @@ class ZosYazi:
 
             elif key == ord("/"):
                 self.filter_text = self.prompt("Filter: ")
+                self.filter_prefix = False
                 self.refresh_dir()
 
             elif key == ord("."):
@@ -1371,11 +1395,22 @@ def main():
     expanded = os.path.expandvars(os.path.expanduser(args.path))
     target = normalize_path(Path(expanded))
 
-    if not target.exists() and not safe_is_dir(target):
-        print(f"zosyazi: path not found: {target}", file=sys.stderr)
-        sys.exit(1)
+    if is_dsfs_path(target):
+        target = get_dsfs_canonical_path(target)
 
-    if safe_is_dir(target):
+    initial_filter = ""
+    initial_filter_prefix = False
+
+    if not target.exists() and not safe_is_dir(target):
+        fallback = resolve_dsfs_qualifier_fallback(target)
+        if fallback:
+            start_dir, initial_filter = fallback
+            initial_select = None
+            initial_filter_prefix = True
+        else:
+            print(f"zosyazi: path not found: {target}", file=sys.stderr)
+            sys.exit(1)
+    elif safe_is_dir(target):
         start_dir = target
         initial_select = None
     else:
@@ -1384,7 +1419,12 @@ def main():
 
     curses.wrapper(
         lambda stdscr: ZosYazi(
-            stdscr, start_dir, cwd_file=args.cwd_file, initial_select=initial_select
+            stdscr,
+            start_dir,
+            cwd_file=args.cwd_file,
+            initial_select=initial_select,
+            initial_filter=initial_filter,
+            initial_filter_prefix=initial_filter_prefix,
         ).run()
     )
 
