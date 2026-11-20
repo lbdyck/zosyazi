@@ -6,6 +6,13 @@ All notable changes to `zosyazi` are documented in this file.
 
 ## [1.1.5] - 2026-11-20
 
+### Added
+- **DSFS Qualifier Auto-Filter (`resolve_dsfs_qualifier_fallback`):** Jumping to a non-existent `/dsfs/<mode>/<hlq>/<qualifier>` path via `c` or the CLI startup argument opens `/dsfs/<mode>/<hlq>` with a strict prefix filter (`<qualifier>.*`).
+
+### Fixed
+- **Prefix-Only Qualifier Filtering:** DSFS qualifier filters match only the start of dataset names.
+- **Footer Status Visibility:** Preserve status and error messages ahead of long file metadata.
+
 ### Improved
 - **Interactive Usability:** Added persistent key hints, visible filter match counts, clearer selection and clipboard details, editable cancellable prompts, detailed paste outcomes, and a scrollable delete review that warns before recursive removal.
 
