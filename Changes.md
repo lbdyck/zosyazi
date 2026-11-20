@@ -4,6 +4,11 @@ All notable changes to `zosyazi` are documented in this file.
 
 ---
 
+## [1.1.5] - 2026-11-20
+
+### Improved
+- **Interactive Usability:** Added persistent key hints, visible filter match counts, clearer selection and clipboard details, editable cancellable prompts, detailed paste outcomes, and a scrollable delete review that warns before recursive removal.
+
 ## [1.1.4] - 2026-11-19
 
 ### Fixed

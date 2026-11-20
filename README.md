@@ -1,6 +1,6 @@
 # zosyazi
 
-**Version:** 1.1.4
+**Version:** 1.1.5
 **License:** MIT
 
 A lightweight, zero-dependency, Yazi-inspired terminal file manager written in Python 3 for **z/OS UNIX** (IBM Open Enterprise SDK for Python).
@@ -39,22 +39,23 @@ A lightweight, zero-dependency, Yazi-inspired terminal file manager written in P
 | --- | --- |
 | `j` / `Down` | Move cursor down |
 | `k` / `Up` | Move cursor up |
-| `h` / `H` / `Left` / `Backspace` | Move to parent directory (or select `..`) |
+| `h` / `H` / `Left` / `Backspace` | Move to parent directory |
 | `l` / `Right` / `Enter` | Enter directory or view file (built-in viewer) |
 | `v` | View current file in built-in viewer |
 | `g` / `G` | Jump to top / bottom of directory list |
 | `c` | Change path interactively (supports env vars and `~`) |
 | `~` | Jump directly to home directory |
 | `m<key>` / `'<key>` | Set / jump to directory bookmark (`h`, `r`, `t`, `d`) |
-| `/` then `Esc` | Filter directory / clear filter |
+| `/` | Enter a directory-name filter (`Enter` applies; `Esc` cancels) |
+| `Esc` | Clear an active filter; otherwise quit |
 | `.` | Toggle hidden dotfiles |
 
 ### File & z/OS Operations
 | Key | Action |
 | --- | --- |
-| `Space` | Select / deselect item (multi-select) |
-| `y` / `x` / `p` | Copy (yank) / Cut / Paste items |
-| `d` | Delete selected or highlighted items |
+| `Space` | Select / deselect item (multi-select; names appear in the footer) |
+| `y` / `x` / `p` | Copy (yank) / Cut / Paste items (footer shows clipboard and destination) |
+| `d` | Review selected or highlighted items, then confirm deletion |
 | `r` | Rename highlighted item |
 | `a` | Create file (end name with `/` for directory) |
 | `e` | Open highlighted file in `$EDITOR` (`vim`/`nano`/`vi`) |
@@ -64,8 +65,12 @@ A lightweight, zero-dependency, Yazi-inspired terminal file manager written in P
 ### General
 | Key | Action |
 | --- | --- |
-| `q` / `Esc` | Quit `zosyazi` |
+| `q` | Quit `zosyazi` |
 | `F1` / `?` | Toggle interactive tutorial |
+
+Prompts support cursor movement, Home/End, Backspace/Delete, and Ctrl-U to clear.
+Press `Enter` to accept or `Esc` to cancel. Directory filters show a match count;
+press `Esc` from the browser to clear an active filter.
 
 ---
 

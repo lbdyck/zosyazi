@@ -40,7 +40,7 @@ import sys
 import time
 from pathlib import Path
 
-__version__ = "1.1.4"
+__version__ = "1.1.5"
 DSFS_ROOT = os.environ.get("ZOSYAZI_DSFS", "/dsfs").rstrip("/")
 
 
@@ -676,7 +676,8 @@ class ZosYazi:
         if self.git_branch:
             badges.append(f"[git:{self.git_branch}]")
         if self.filter_text:
-            badges.append(f"[filter:{self.filter_text}]")
+            match_count = sum(1 for entry in self.entries if entry.name != "..")
+            badges.append(f"[filter:{self.filter_text} {match_count}]")
 
         try:
             if not is_dsfs_path(self.cwd):
@@ -713,8 +714,10 @@ class ZosYazi:
         elif self.cursor >= self.scroll + body_h:
             self.scroll = self.cursor - body_h + 1
 
+        has_filter_matches = any(entry.name != ".." for entry in self.entries)
         if not self.entries:
-            safe_addstr(self.stdscr, 1, left_w + 2, "<empty>", curses.A_DIM, mid_w - 1)
+            empty_text = "<no matches; Esc clears>" if self.filter_text else "<empty>"
+            safe_addstr(self.stdscr, 1, left_w + 2, empty_text, curses.A_DIM, mid_w - 1)
         else:
             visible = self.entries[self.scroll : self.scroll + body_h]
             for idx, p in enumerate(visible):
@@ -750,6 +753,15 @@ class ZosYazi:
                     label,
                     base_attr,
                     mid_w - name_offset,
+                )
+            if self.filter_text and not has_filter_matches and body_h > 1:
+                safe_addstr(
+                    self.stdscr,
+                    2,
+                    left_w + 2,
+                    "<no matches; Esc clears>",
+                    curses.A_DIM,
+                    mid_w - 1,
                 )
 
         # 3. Right Pane: Preview
@@ -790,61 +802,156 @@ class ZosYazi:
                     info = " <stat failed>"
 
         extra = []
-        if self.selected:
-            extra.append(f"Sel:{len(self.selected)}")
-        if self.clipboard and self.clipboard_mode:
-            extra.append(f"{self.clipboard_mode.upper()}:{len(self.clipboard)}")
         if self.status_msg:
             extra.append(self.status_msg)
+        if self.selected:
+            names = sorted(path.name for path in self.selected)
+            shown_names = ", ".join(names[:2])
+            if len(names) > 2:
+                shown_names += f", +{len(names) - 2}"
+            extra.append(f"Sel:{len(names)} {shown_names}")
+        if self.clipboard and self.clipboard_mode:
+            names = sorted(path.name for path in self.clipboard)
+            shown_names = ", ".join(names[:2])
+            if len(names) > 2:
+                shown_names += f", +{len(names) - 2}"
+            extra.append(
+                f"{self.clipboard_mode.upper()}:{len(self.clipboard)} {shown_names} -> "
+                f"{self.cwd.name or self.cwd}"
+            )
 
-        right_status = " | ".join(extra) + " "
-        pad = max(1, w - len(info) - len(right_status) - 1)
-        full_footer = (info + (" " * pad) + right_status)[: w - 1]
-        safe_addstr(self.stdscr, h - 1, 0, full_footer.ljust(w - 1), curses.color_pair(5))
+        footer_width = w - 1
+        enter_hint = "Enter open dir" if cur and safe_is_dir(cur) else "Enter view"
+        long_hint = f"j/k move | {enter_hint} | Space mark | ? help | q quit"
+        short_hint = "? help | Esc clear | q quit" if self.filter_text else "? help | q quit"
+        if self.filter_text:
+            long_hint += " | Esc clear"
+        hint = long_hint if footer_width > len(long_hint) + 8 else short_hint
+        state = " | ".join(extra)
+        state_width = max(0, footer_width - len(hint) - 3)
+        if state and state_width:
+            right_status = f"{state[:state_width]} | {hint}"
+        else:
+            right_status = hint[:footer_width]
+        right_width = min(len(right_status), footer_width)
+        info_width = max(0, footer_width - right_width - 1)
+        info = info[:info_width]
+        right_status = right_status[:right_width]
+        full_footer = info.ljust(info_width)
+        if info_width:
+            full_footer += " "
+        full_footer += right_status
+        safe_addstr(self.stdscr, h - 1, 0, full_footer.ljust(footer_width), curses.color_pair(5))
 
         self.stdscr.refresh()
 
-    def prompt(self, prompt_text: str) -> str:
-        h, w = self.stdscr.getmaxyx()
-        curses.echo()
+    def prompt(self, prompt_text: str) -> str | None:
+        """Read an editable, horizontally scrolling prompt; Escape cancels it."""
+        value = []
+        cursor = 0
+        curses.noecho()
         curses.curs_set(1)
-        safe_addstr(self.stdscr, h - 1, 0, " " * (w - 1), curses.color_pair(5))
-        safe_addstr(self.stdscr, h - 1, 0, prompt_text, curses.color_pair(5) | curses.A_BOLD)
-        self.stdscr.refresh()
         try:
-            raw = self.stdscr.getstr(h - 1, len(prompt_text), w - len(prompt_text) - 2)
-            result = raw.decode("utf-8", errors="replace").strip()
-        except Exception:
-            result = ""
+            while True:
+                h, w = self.stdscr.getmaxyx()
+                if h < 1 or w < 4:
+                    self.status_msg = "Prompt unavailable: terminal too small"
+                    return None
+
+                prompt_width = min(len(prompt_text), max(1, w // 2))
+                visible_prompt = prompt_text
+                if len(visible_prompt) > prompt_width:
+                    if prompt_width > 3:
+                        visible_prompt = "..." + visible_prompt[-(prompt_width - 3):]
+                    else:
+                        visible_prompt = visible_prompt[-prompt_width:]
+                input_x = min(len(visible_prompt), w - 2)
+                input_width = max(1, w - input_x - 1)
+                start = max(0, cursor - input_width + 1)
+                end = min(len(value), start + input_width)
+                if end - start < input_width:
+                    start = max(0, end - input_width)
+
+                self.stdscr.move(h - 1, 0)
+                self.stdscr.clrtoeol()
+                safe_addstr(
+                    self.stdscr,
+                    h - 1,
+                    0,
+                    visible_prompt,
+                    curses.color_pair(5) | curses.A_BOLD,
+                )
+                safe_addstr(
+                    self.stdscr,
+                    h - 1,
+                    input_x,
+                    "".join(value[start:end]),
+                    curses.color_pair(5),
+                    input_width,
+                )
+                cursor_x = input_x + min(max(0, cursor - start), input_width - 1)
+                self.stdscr.move(h - 1, cursor_x)
+                self.stdscr.refresh()
+
+                key = self.stdscr.get_wch()
+                if key in ("\n", "\r", curses.KEY_ENTER):
+                    return "".join(value).strip()
+                if key in ("\x1b", "\x03"):
+                    return None
+                if key in (curses.KEY_LEFT, "\x02"):
+                    cursor = max(0, cursor - 1)
+                elif key in (curses.KEY_RIGHT, "\x06"):
+                    cursor = min(len(value), cursor + 1)
+                elif key in (curses.KEY_HOME, "\x01"):
+                    cursor = 0
+                elif key in (curses.KEY_END, "\x05"):
+                    cursor = len(value)
+                elif key in (curses.KEY_BACKSPACE, "\x7f", "\x08"):
+                    if cursor:
+                        del value[cursor - 1]
+                        cursor -= 1
+                elif key == curses.KEY_DC:
+                    if cursor < len(value):
+                        del value[cursor]
+                elif key == "\x15":
+                    value.clear()
+                    cursor = 0
+                elif isinstance(key, str) and key.isprintable():
+                    value.insert(cursor, key)
+                    cursor += 1
+        except curses.error as e:
+            self.status_msg = f"Prompt failed: {e}"
+            return None
         finally:
-            curses.noecho()
             curses.curs_set(0)
-        return result
+            curses.noecho()
 
     def show_tutorial(self):
         """Colored, scrollable F1 interactive tutorial."""
         content = [
             ("section", "1. NAVIGATION", ""),
             ("key", "  j / k / Up / Down  ", "Move cursor down / up"),
-            ("key", "  h / H / Left / BS  ", "Go to parent directory (or select '..')"),
+            ("key", "  h / H / Left / BS  ", "Go to parent directory"),
             ("key", "  l / Right / Enter  ", "Enter directory or view file (built-in)"),
             ("key", "  v                  ", "View current file in built-in viewer"),
             ("key", "  g / G              ", "Jump to top / bottom of list"),
             ("key", "  c                  ", "Change top-level path (e.g. /dsfs/txt, ~, $HOME)"),
             ("key", "  ~                  ", "Jump directly to home directory"),
             ("key", "  m<key> / '<key>    ", "Set bookmark / Jump to bookmark (h, r, t, d)"),
-            ("key", "  /  then  Esc       ", "Filter current directory / clear filter"),
+            ("key", "  /  then  Enter     ", "Filter current directory; Esc cancels"),
+            ("key", "  Esc                ", "Clear an active filter"),
             ("key", "  .                  ", "Toggle hidden dotfiles"),
             ("blank", "", ""),
             ("section", "2. FILE OPERATIONS", ""),
             ("key", "  Space              ", "Select / deselect item (multi-select)"),
             ("key", "  y / x / p          ", "Copy (yank) / Cut / Paste"),
-            ("key", "  d                  ", "Delete selected items or current item"),
+            ("key", "  d                  ", "Review items and confirm deletion"),
             ("key", "  r                  ", "Rename current item"),
             ("key", "  a                  ", "Create file (end name with / for directory)"),
             ("key", "  e                  ", "Open current file in $EDITOR (vim/nano/vi)"),
             ("key", "  T                  ", "Manage z/OS file tags (chtag -t/-r/etc)"),
             ("key", "  ! / X              ", "Execute shell command or submit JCL file"),
+            ("text", "  Prompts: Enter accepts, Esc cancels; arrows/Home/End edit; Ctrl-U clears.", ""),
             ("blank", "", ""),
             ("section", "3. GIT STATUS BADGES", ""),
             ("git", "  M  ", "Modified file (or directory containing changes)"),
@@ -861,7 +968,7 @@ class ZosYazi:
             ("text", "  to decode previews automatically. Batch tags cached for high performance.", ""),
             ("blank", "", ""),
             ("section", "5. EXITING", ""),
-            ("key", "  q / Esc            ", "Quit zosyazi (supports --cwd-file wrapper)"),
+            ("key", "  q / Esc            ", "Quit; Esc clears an active filter first"),
             ("key", "  F1 / ?             ", "Open or close this tutorial"),
         ]
 
@@ -1033,8 +1140,12 @@ class ZosYazi:
         current_tag = self.get_tag_cached(target) or "untagged"
         prompt_txt = f"chtag ({target.name} is {current_tag}) [1=ISO8859-1, 2=IBM-1047, 3=UTF-8, 4=Remove, 5=Custom]: "
         choice = self.prompt(prompt_txt)
+        if choice is None:
+            if not self.status_msg.startswith("Prompt failed:"):
+                self.status_msg = "chtag cancelled"
+            return
         if not choice:
-            self.status_msg = "chtag cancelled"
+            self.status_msg = "Invalid chtag option"
             return
 
         cmd = None
@@ -1048,8 +1159,15 @@ class ZosYazi:
             cmd = ["chtag", "-r", str(target)]
         elif choice == "5":
             custom_ccs = self.prompt("Enter CCSID or encoding name (e.g. IBM-1047, ISO8859-1, 819): ")
+            if custom_ccs is None:
+                if not self.status_msg.startswith("Prompt failed:"):
+                    self.status_msg = "chtag cancelled"
+                return
             if custom_ccs:
                 cmd = ["chtag", "-tc", custom_ccs, str(target)]
+            else:
+                self.status_msg = "CCSID cannot be empty"
+                return
         else:
             self.status_msg = "Invalid chtag option"
             return
@@ -1078,6 +1196,8 @@ class ZosYazi:
         is_jcl = cur.suffix.lower() in (".jcl", ".cntl", ".job")
         if is_jcl:
             ans = self.prompt(f"Submit '{cur.name}' as JCL job? (y/N/command): ")
+            if ans is None:
+                return
             if ans.lower() == "y":
                 # Attempt z/OS submit
                 submit_cmd = shutil.which("submit") or "/bin/submit"
@@ -1094,7 +1214,7 @@ class ZosYazi:
                 return
         else:
             cmd_str = self.prompt(f"Run command (%f = '{cur.name}'): ")
-            if not cmd_str:
+            if cmd_str is None or not cmd_str:
                 return
 
         cmd_str = cmd_str.replace("%f", f'"{cur.name}"').replace("%F", f'"{str(cur)}"')
@@ -1140,10 +1260,15 @@ class ZosYazi:
             self.status_msg = "Clipboard is empty"
             return
         count = 0
+        skipped = []
+        failures = []
+        remaining_cut = []
         for src in self.clipboard:
             dst = self.cwd / src.name
             if dst.exists():
-                self.status_msg = f"Skipped existing: {src.name}"
+                skipped.append(src.name)
+                if self.clipboard_mode == "cut":
+                    remaining_cut.append(src)
                 continue
             try:
                 if self.clipboard_mode == "copy":
@@ -1155,35 +1280,110 @@ class ZosYazi:
                     shutil.move(str(src), str(dst))
                 count += 1
             except OSError as e:
-                self.status_msg = f"Error: {e.strerror}"
-                return
+                failures.append(f"{src.name}: {e.strerror or e}")
+                if self.clipboard_mode == "cut":
+                    remaining_cut.append(src)
         if self.clipboard_mode == "cut":
-            self.clipboard = []
-            self.clipboard_mode = None
+            self.clipboard = remaining_cut
+            if not remaining_cut:
+                self.clipboard_mode = None
         self.selected.clear()
-        self.refresh_dir()
-        self.status_msg = f"Pasted {count} item(s)"
+        if count:
+            self.refresh_dir()
+
+        summary = []
+        if count:
+            summary.append(f"Pasted {count}")
+        if skipped:
+            summary.append(f"skipped {len(skipped)} existing")
+        if failures:
+            detail = failures[0]
+            if len(failures) > 1:
+                detail += f" (+{len(failures) - 1} more)"
+            summary.append(f"failed {len(failures)}: {detail}")
+        self.status_msg = "; ".join(summary) if summary else "No items pasted"
+
+    def confirm_delete(self, targets: list[Path]) -> bool:
+        offset = 0
+        while True:
+            self.stdscr.erase()
+            h, w = self.stdscr.getmaxyx()
+            title = f" Delete {len(targets)} item(s)? "
+            safe_addstr(self.stdscr, 0, 0, title.ljust(w), curses.color_pair(5) | curses.A_BOLD)
+            safe_addstr(
+                self.stdscr,
+                1,
+                0,
+                "Directories will be removed recursively. y confirms; n/Esc cancels.",
+                curses.A_BOLD,
+                w,
+            )
+
+            body_h = max(0, h - 3)
+            max_offset = max(0, len(targets) - body_h)
+            offset = min(offset, max_offset)
+            for idx, path in enumerate(targets[offset : offset + body_h]):
+                recursive = safe_is_dir(path) and not path.is_symlink()
+                suffix = " [recursive]" if recursive else ""
+                name = path.name or str(path)
+                safe_addstr(
+                    self.stdscr,
+                    2 + idx,
+                    0,
+                    f" {name}{suffix} ({path.parent})",
+                    max_w=w,
+                )
+
+            footer = " j/k: Scroll | y: Delete | n/Esc: Cancel "
+            safe_addstr(self.stdscr, h - 1, 0, footer.ljust(w), curses.color_pair(5))
+            self.stdscr.refresh()
+
+            key = self.stdscr.getch()
+            if key in (ord("y"), ord("Y")):
+                return True
+            if key in (ord("n"), ord("N"), 27):
+                return False
+            if key in (ord("j"), curses.KEY_DOWN):
+                offset = min(max_offset, offset + 1)
+            elif key in (ord("k"), curses.KEY_UP):
+                offset = max(0, offset - 1)
+            elif key == curses.KEY_NPAGE:
+                offset = min(max_offset, offset + max(1, body_h))
+            elif key == curses.KEY_PPAGE:
+                offset = max(0, offset - max(1, body_h))
+            elif key == curses.KEY_RESIZE:
+                continue
 
     def handle_delete(self):
         targets = self.get_targets()
         if not targets:
             return
-        ans = self.prompt(f"Delete {len(targets)} item(s)? (y/N): ")
-        if ans.lower() != "y":
+        if not self.confirm_delete(targets):
             self.status_msg = "Delete cancelled"
             return
+        deleted = []
+        failures = []
         for p in targets:
             try:
                 if safe_is_dir(p) and not p.is_symlink():
                     shutil.rmtree(p)
                 else:
                     p.unlink()
+                deleted.append(p)
             except OSError as e:
-                self.status_msg = f"Delete failed: {e.strerror}"
-                return
-        self.selected.clear()
-        self.refresh_dir()
-        self.status_msg = f"Deleted {len(targets)} item(s)"
+                failures.append(f"{p.name}: {e.strerror or e}")
+        self.selected.difference_update(deleted)
+        if deleted:
+            self.refresh_dir()
+        summary = []
+        if deleted:
+            summary.append(f"Deleted {len(deleted)}")
+        if failures:
+            detail = failures[0]
+            if len(failures) > 1:
+                detail += f" (+{len(failures) - 1} more)"
+            summary.append(f"failed {len(failures)}: {detail}")
+        self.status_msg = "; ".join(summary) if summary else "Nothing deleted"
 
     def run(self):
         while True:
@@ -1333,8 +1533,12 @@ class ZosYazi:
                         self.status_msg = f"Create failed: {e.strerror}"
 
             elif key == ord("/"):
-                self.filter_text = self.prompt("Filter: ")
-                self.refresh_dir()
+                new_filter = self.prompt("Filter: ")
+                if new_filter is not None:
+                    self.filter_text = new_filter
+                    self.refresh_dir()
+                    match_count = sum(1 for entry in self.entries if entry.name != "..")
+                    self.status_msg = f"{match_count} match(es)" if new_filter else "Filter cleared"
 
             elif key == ord("."):
                 self.show_hidden = not self.show_hidden

@@ -1,6 +1,6 @@
 .\" Manpage for zosyazi
 .\" Contact: https://github.com/
-.TH ZOSYAZI 1 "19 November 2026" "zosyazi 1.1.4" "User Commands"
+.TH ZOSYAZI 1 "20 November 2026" "zosyazi 1.1.5" "User Commands"
 .SH NAME
 zosyazi \- lightweight terminal file manager for z/OS UNIX and /dsfs
 .SH SYNOPSIS
@@ -47,7 +47,7 @@ Move cursor down.
 Move cursor up.
 .TP
 .BR h ", " H ", " Left ", " Backspace
-Move up to the parent directory (or activate the \fB..\fR entry).
+Move directly to the parent directory.
 .TP
 .BR l ", " Right ", " Enter
 Enter the highlighted directory or open the highlighted file in the built-in viewer.
@@ -68,8 +68,9 @@ Jump directly to the user's home directory.
 Set bookmark (\fBm\fR followed by a letter) or jump to bookmark (\fB'\fR followed by a letter).
 Predefined bookmarks: \fBh\fR (home), \fBr\fR (/), \fBt\fR (/tmp), \fBd\fR (/dsfs/txt).
 .TP
-.BR / " then " Esc
-Filter current directory listing / clear active filter.
+.BR / " then " Enter
+Open the directory-name filter prompt. Press Enter to apply the filter or Escape to cancel.
+The header displays the number of matches; Escape in the browser clears an active filter.
 .TP
 .B .
 Toggle display of hidden files (dotfiles).
@@ -77,13 +78,16 @@ Toggle display of hidden files (dotfiles).
 .SS File Operations
 .TP
 .B Space
-Toggle selection mark on the highlighted item (supports multi-item operations).
+Toggle selection mark on the highlighted item (supports multi-item operations); selected names
+appear in the footer.
 .TP
 .BR y " / " x " / " p
-Yank (copy) / Cut / Paste selected or highlighted items.
+Yank (copy) / Cut / Paste selected or highlighted items. The footer shows clipboard items and
+the current paste destination. Existing destination items are skipped and reported.
 .TP
 .B d
-Delete selected items or current item (with confirmation).
+Review the selected items or current item, then confirm deletion. Directories are removed
+recursively; the confirmation screen marks them explicitly.
 .TP
 .B r
 Rename the highlighted item.
@@ -106,11 +110,17 @@ by the filename and \fB%F\fR is replaced by the full path.
 
 .SS General
 .TP
-.BR q ", " Esc
-Quit \fBzosyazi\fR.
+.B q
+Quit \fBzosyazi\fR. Escape clears an active filter; otherwise it quits.
 .TP
 .BR F1 ", " ?
 Toggle the interactive, color-coded help tutorial.
+
+.SS Prompts
+Prompts accept editable text, including input longer than the terminal width. Use Left / Right
+or Home / End to move the cursor, Backspace / Delete to edit, and Ctrl-U to clear the input.
+Press Enter to accept or Escape to cancel. The browser footer shows common navigation keys and
+the help key.
 
 .SH Z/OS & DSFS INTEGRATION
 .B zosyazi
